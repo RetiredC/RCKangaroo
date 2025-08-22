@@ -519,7 +519,7 @@ __device__ __forceinline__ void InvModP(u32* res)
 	__align__(8) u32 modp[9];
 	__align__(8) u32 val[9];
 	__align__(8) u32 a[9];
-	__align__(8) u32 tmp[4][9+1]; //+1 because we need alignment 64bit for tmp[>0]
+	__align__(8) u32 tmp[4][9];
 
 	((u64*)modp)[0] = P_0;
 	((u64*)modp)[1] = P_123;
@@ -627,4 +627,54 @@ __device__ __forceinline__ void InvModP(u32* res)
 	while ((int)res[8] > 0)
 		sub_288_P(res);
 }
+
+// === Extensiones: utilidades Jacobianas (GPU) ================================
+__device__ __forceinline__ void SquareModP(u64 *res, u64 *a) {
+	MulModP(res, a, a);
+}
+
+// r = 2*p  (doblado jacobiano, a=0)
+__device__ __forceinline__ void JacobianDouble(u64 *X3,u64 *Y3,u64 *Z3,const u64 *X1,const u64 *Y1,const u64 *Z1){
+	u64 XX[4],YY[4],YYYY[4],S[4],M[4],T[4],twoS[4],Z3tmp[4];
+	Copy_u64_x4(XX,(void*)X1); MulModP(XX,XX,XX);
+	Copy_u64_x4(YY,(void*)Y1); MulModP(YY,YY,YY);
+	Copy_u64_x4(YYYY,YY);      MulModP(YYYY,YYYY,YY);
+	Copy_u64_x4(S,(void*)X1);  MulModP(S,S,YY); AddModP(S,S,S); // 2*X1*Y1^2
+	Copy_u64_x4(M,XX); AddModP(M,M,XX); AddModP(M,M,XX);        // 3*X1^2
+	Copy_u64_x4(T,M);  MulModP(T,T,M);                           // M^2
+	Copy_u64_x4(twoS,S); AddModP(twoS,twoS,S);                   // 2*S
+	SubModP((u64*)X3,T,twoS);                                    // X3
+	u64 V[4]; Copy_u64_x4(V,S); SubModP(V,V,(u64*)X3); MulModP(V,V,M);
+	u64 eightYYYY[4]; Copy_u64_x4(eightYYYY,YYYY);
+	for (int i=0;i<3;i++) AddModP(eightYYYY,eightYYYY,YYYY); // *8
+	SubModP((u64*)Y3,V,eightYYYY);
+	Copy_u64_x4(Z3tmp,(void*)Y1); AddModP(Z3tmp,Z3tmp,(u64*)Y1); MulModP(Z3tmp,Z3tmp,(u64*)Z1);
+	Copy_u64_x4((u64*)Z3,Z3tmp);
+}
+
+// r = p + q_aff  (mixta)
+__device__ __forceinline__ void JacobianAddMixed(u64 *X3,u64 *Y3,u64 *Z3,const u64 *X1,const u64 *Y1,const u64 *Z1,const u64 *Qx,const u64 *Qy){
+	u64 Z2[4],Z3_[4],U2[4],S2[4],H[4],R[4];
+	Copy_u64_x4(Z2,(void*)Z1); MulModP(Z2,Z2,Z2);
+	Copy_u64_x4(Z3_,Z2);       MulModP(Z3_,Z3_,(u64*)Z1);
+	Copy_u64_x4(U2,(void*)Qx); MulModP(U2,U2,Z2);
+	Copy_u64_x4(S2,(void*)Qy); MulModP(S2,S2,Z3_);
+	Copy_u64_x4(H,U2); SubModP(H,H,(u64*)X1);
+	Copy_u64_x4(R,S2); SubModP(R,R,(u64*)Y1);
+	// if H==0 -> degenerate (omit; improbable en saltos aleatorios)
+	u64 HH[4],HHH[4],V[4],X3_[4],Y3_[4],Z3tmp[4];
+	Copy_u64_x4(HH,H);  MulModP(HH,HH,H);
+	Copy_u64_x4(HHH,HH);MulModP(HHH,HHH,H);
+	Copy_u64_x4(V,(void*)X1);  MulModP(V,V,HH);
+	Copy_u64_x4(X3_,R); MulModP(X3_,X3_,R);
+	SubModP(X3_,X3_,HHH);
+	u64 twoV[4]; Copy_u64_x4(twoV,V); AddModP(twoV,twoV,V);
+	SubModP((u64*)X3,X3_,twoV);
+	Copy_u64_x4(Y3_,V); SubModP(Y3_,Y3_,(u64*)X3); MulModP(Y3_,Y3_,R);
+	u64 S1HHH[4]; Copy_u64_x4(S1HHH,(void*)Y1); MulModP(S1HHH,S1HHH,HHH);
+	SubModP((u64*)Y3,Y3_,S1HHH);
+	Copy_u64_x4(Z3tmp,(void*)Z1); MulModP(Z3tmp,Z3tmp,H);
+	Copy_u64_x4((u64*)Z3,Z3tmp);
+}
+// ============================================================================
 

@@ -28,6 +28,11 @@ extern __shared__ u64 LDS[];
 
 //this kernel performs main jumps
 extern "C" __launch_bounds__(BLOCK_SIZE, 1)
+
+// === Jacobian option (experimental) =========================================
+// Para habilitar: compilar con -DUSE_JACOBIAN=1. Mantiene el formato de salida.
+// Implementa sumas J+A y conversión por lotes sólo para la verificación DP.
+// ============================================================================
 __global__ void KernelA(const TKparams Kparams)
 {
 	u64* L2x = Kparams.L2 + 2 * THREAD_X + 4 * BLOCK_SIZE * BLOCK_X;
@@ -79,6 +84,73 @@ __global__ void KernelA(const TKparams Kparams)
 
     for (int step_ind = 0; step_ind < STEP_CNT; step_ind++)
     {
+#if USE_JACOBIAN
+        // [Jacobian path] — usamos L2x=L2X, L2y=L2Y, L2s=L2Z
+        __align__(16) u64 X[4], Y[4], Z[4];
+        // 1) Cargar Z=1 si es la primera iteración
+        for (int group = 0; group < PNT_GROUP_CNT; group++) {
+            LOAD_VAL_256(X, L2x, group);
+            LOAD_VAL_256(Y, L2y, group);
+            if (step_ind==0) { Z[0]=1; Z[1]=Z[2]=Z[3]=0; }
+            else { LOAD_VAL_256(Z, L2s, group); }
+            // salto
+            u64* jmp_table;
+            __align__(16) u64 jmp_x[4], jmp_y[4];
+            u16 jmp_ind_loc = X[0] % JMP_CNT;
+            jmp_table = ((L1S2 >> group) & 1) ? jmp2_table : jmp1_table;
+            Copy_int4_x2(jmp_x, jmp_table + 8 * jmp_ind_loc);
+            Copy_int4_x2(jmp_y, jmp_table + 8 * jmp_ind_loc + 4);
+            // manejo de inversión de y según bit
+            u32 inv_flag = (u32)Y[0] & 1u;
+            if (inv_flag) { jmp_ind_loc |= INV_FLAG; NegModP(jmp_y); }
+            u64 X3[4],Y3[4],Z3[4];
+            JacobianAddMixed(X3,Y3,Z3,X,Y,Z,jmp_x,jmp_y);
+            SAVE_VAL_256(L2x, X3, group);
+            SAVE_VAL_256(L2y, Y3, group);
+            SAVE_VAL_256(L2s, Z3, group);
+
+            // Conversión batched a afín sólo para DP (una inversión total por hilo)
+        }
+        // Batch inversion: Z^-1 para todos los grupos (Montgomery trick)
+        __align__(16) u64 prod[4] = {1,0,0,0};
+        for (int group=0; group<PNT_GROUP_CNT; group++) {
+            LOAD_VAL_256(Z, L2s, group);
+            MulModP(prod, prod, Z);
+            SAVE_VAL_256(L2s, prod, group); // prefijos
+        }
+        InvModP((u32*)prod); // prod = (∏Z)^-1
+        for (int group=PNT_GROUP_CNT-1; group>=0; group--) {
+            __align__(16) u64 prev[4] = {1,0,0,0};
+            if (group>0) LOAD_VAL_256(prev, L2s, group-1);
+            LOAD_VAL_256(Z, L2s, group);
+            __align__(16) u64 invZ[4]; MulModP(invZ, prod, prev); // Z_i^-1
+            // actualizar prod = prod * Z_i
+            MulModP(prod, prod, Z);
+            // x_aff = X * invZ^2
+            __align__(16) u64 Xg[4], invZ2[4];
+            LOAD_VAL_256(Xg, L2x, group);
+            MulModP(invZ2, invZ, invZ);
+            MulModP(Xg, Xg, invZ2);
+            // check DP
+            if ((Xg[3] & dp_mask64) == 0) {
+                u32 kang_ind = (THREAD_X + BLOCK_X * BLOCK_SIZE) * PNT_GROUP_CNT + group;
+                u32 ind = atomicAdd(Kparams.DPTable + kang_ind, 1);
+                ind = min(ind, DPTABLE_MAX_CNT - 1);
+                int4 *pdst = (int4*)(&Kparams.DPs_out[(u64)kang_ind * DPTABLE_MAX_CNT * 8 + 8 * ind]);
+                ((int4*)pdst)[0] = ((int4*)Xg)[0];
+                ((int4*)pdst)[1] = ((int4*)Xg)[1];
+                // acción de salto (igual al camino original)
+                // NOTA: reusamos jmp_ind_loc de arriba no disponible aquí; reconstituimos:
+                LOAD_VAL_256(X, L2x, group);
+                u16 ji = X[0] % JMP_CNT;
+                ji |= ((u32)Y[0] & 1u) ? 0 : INV_FLAG;
+                ((u16*)pdst)[8+0] = ji; // almacena índice salto+flags
+                ((u16*)pdst)[8+1] = 0;
+            }
+        }
+        continue; // saltamos el camino afín original
+#endif // USE_JACOBIAN
+
         __align__(16) u64 inverse[5];
 		u64* jmp_table;
 		__align__(16) u64 jmp_x[4];
@@ -532,12 +604,61 @@ __device__ __forceinline__ bool ProcessJumpDistance(u32 step_ind, u32 d_cur, u64
 	table[iter] = d[0];
 	*cur_ind = (iter + 1) % MD_LEN;
 
-	if (found_ind < 0)
-	{		
-		if (d_cur & DP_FLAG)
-			BuildDP(Kparams, kang_ind, d);
-		return false;
-	}
+	// --- Warp-aggregated emisión de DPs (reemplaza BuildDP) ---
+if (found_ind < 0)
+{
+    // 1) Cada hilo decide si «quiere emitir» un DP en este paso
+    //    (antes llamábamos a BuildDP)
+    bool emit = false;
+    int4 rx_local;  // X parcial del DP (lo que lectura BuildDP hacía)
+    if (d_cur & DP_FLAG) {
+        // Replicamos la parte de BuildDP que obtiene el X guardado en DPTable
+        int idx = atomicAdd(Kparams.DPTable + kang_ind, 0x10000);
+        idx >>= 16;  // índice de lectura (alto de 16 bits)
+        if (idx < DPTABLE_MAX_CNT) {
+            rx_local = *(int4*)(Kparams.DPTable
+                       + Kparams.KangCnt
+                       + (kang_ind * DPTABLE_MAX_CNT + idx) * 4);
+            emit = true;
+        }
+    }
+
+    // 2) Warp-aggregated atomic: una sola atomicAdd por warp
+    const unsigned active = __activemask();
+    const int lane = threadIdx.x & 31;
+    const int leader = __ffs(active) - 1;              // primer lane activo
+    unsigned mask_emit = __ballot_sync(active, emit);  // quiénes emiten en el warp
+    int hits = __popc(mask_emit);                      // cuántos DPs emiten
+
+    if (hits) {
+        // Sólo el líder reserva 'hits' slots contiguos en la salida
+        unsigned base = 0;
+        if (lane == leader) {
+            base = atomicAdd(Kparams.DPs_out, (unsigned)hits);
+        }
+        // Broadcast del 'base' al warp
+        base = __shfl_sync(active, base, leader);
+
+        if (emit) {
+            // Posición compacta de este hilo dentro del bloque reservado
+            unsigned laneMask = mask_emit & ((1u << lane) - 1u);
+            unsigned pos = __popc(laneMask);
+
+            unsigned outIdx = base + pos;
+            outIdx = min(outIdx, (unsigned)(MAX_DP_CNT - 1));
+
+            // Escribir el registro exactamente igual que BuildDP
+            u32* DPs = Kparams.DPs_out + 4 + outIdx * (GPU_DP_SIZE / 4);
+            *(int4*)&DPs[0] = rx_local;              // X parcial (int4)
+            *(int4*)&DPs[4] = ((int4*)d)[0];         // dist[0..1] (128 bits)
+            *(u64*)&DPs[8] = d[2];                   // dist[2]   (64  bits)
+            DPs[10] = 3 * kang_ind / Kparams.KangCnt; // tipo de kanguro
+        }
+    }
+
+    return false;
+}
+
 
 	u32 LoopSize = (iter + MD_LEN - found_ind) % MD_LEN;
 	if (!LoopSize)

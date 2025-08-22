@@ -38,6 +38,7 @@ public:
 	void AddModP(EcInt& val);
 	void SubModP(EcInt& val);
 	void NegModP();
+	void NegModN();
 	void MulModP(EcInt& val);
 	void InvModP();
 	void SqrtModP();
@@ -75,3 +76,5 @@ public:
 void InitEc();
 void DeInitEc();
 void SetRndSeed(u64 seed);
+
+class EcEx { public: static EcPoint MultiplyG_WNAF4(const EcInt &k); };

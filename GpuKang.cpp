@@ -9,6 +9,8 @@
 #include "cuda.h"
 
 #include "GpuKang.h"
+extern int gTameRatioPct;
+extern int gTameBitsOffset;
 
 cudaError_t cuSetGpuParams(TKparams Kparams, u64* _jmp2_table);
 void CallGpuKernelGen(TKparams Kparams);
@@ -285,12 +287,15 @@ void RCGpuKang::GenerateRndDistances()
 	for (int i = 0; i < KangCnt; i++)
 	{
 		EcInt d;
-		if (i < KangCnt / 3)
-			d.RndBits(Range - 4); //TAME kangs
+		int tameBorder = (KangCnt * gTameRatioPct) / 100;
+		int tameBits = Range - gTameBitsOffset;
+		if (tameBits < 1) tameBits = 1;
+		if (i < tameBorder)
+			d.RndBits(tameBits); // TAME kangs
 		else
 		{
 			d.RndBits(Range - 1);
-			d.data[0] &= 0xFFFFFFFFFFFFFFFE; //must be even
+			d.data[0] &= 0xFFFFFFFFFFFFFFFE; // must be even
 		}
 		memcpy(RndPnts[i].priv, d.data, 24);
 	}

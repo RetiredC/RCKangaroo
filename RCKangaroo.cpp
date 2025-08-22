@@ -5,6 +5,8 @@
 
 
 #include <iostream>
+#include <cstdlib>
+
 #include <vector>
 
 #include "cuda_runtime.h"
@@ -12,6 +14,9 @@
 
 #include "defs.h"
 #include "utils.h"
+#ifndef DB_REC_LEN
+#define DB_REC_LEN 32
+#endif
 #include "GpuKang.h"
 
 
@@ -51,6 +56,8 @@ bool gStartSet;
 EcPoint gPubKey;
 u8 gGPUs_Mask[MAX_GPU_CNT];
 char gTamesFileName[1024];
+int gTameRatioPct = 33;
+int gTameBitsOffset = 4;
 double gMax;
 bool gGenMode; //tames generation mode
 bool gIsOpsLimit;
@@ -219,7 +226,11 @@ void CheckNewPoints()
 			//in db we dont store first 3 bytes so restore them
 			DBRec tmp_pref;
 			memcpy(&tmp_pref, &nrec, 3);
-			memcpy(((u8*)&tmp_pref) + 3, pref, sizeof(DBRec) - 3);
+			size_t __rec_tail = (size_t)DB_REC_LEN;
+					 size_t __exp_tail = (size_t)sizeof(DBRec) - 3;
+					 size_t __cpy = __rec_tail < __exp_tail ? __rec_tail : __exp_tail;
+					 memcpy(((u8*)&tmp_pref) + 3, pref, __cpy);
+					 if (__cpy < __exp_tail) memset(((u8*)&tmp_pref) + 3 + __cpy, 0, __exp_tail - __cpy);
 			pref = &tmp_pref;
 
 			if (pref->type == nrec.type)
@@ -572,24 +583,39 @@ bool ParseCommandLine(int argc, char* argv[])
 			ci++;
 		}
 		else
+		if (strcmp(argument, "-tame-ratio") == 0)
+		{
+			if (ci >= argc) { printf("error: missed value after -tame-ratio option\r\n"); return false; }
+			int ratio = atoi(argv[ci]); ci++;
+			if (ratio < 1 || ratio > 90) { printf("error: invalid value for -tame-ratio (1..90)\r\n"); return false; }
+			gTameRatioPct = ratio;
+		}
+		else
+		if (strcmp(argument, "-tame-bits") == 0)
+		{
+			if (ci >= argc) { printf("error: missed value after -tame-bits option\r\n"); return false; }
+			int bits = atoi(argv[ci]); ci++;
+			if (bits < 1 || bits > 32) { printf("error: invalid value for -tame-bits (1..32)\r\n"); return false; }
+			gTameBitsOffset = bits;
+		}
+
+		else
 		if (strcmp(argument, "-tames") == 0)
 		{
-			strcpy(gTamesFileName, argv[ci]);
+			if (ci >= argc) { printf("error: missed value after -tames option\r\n"); return false; }
+			strncpy(gTamesFileName, argv[ci], sizeof(gTamesFileName)-1);
+			gTamesFileName[sizeof(gTamesFileName)-1] = 0;
 			ci++;
 		}
 		else
 		if (strcmp(argument, "-max") == 0)
 		{
-			double val = atof(argv[ci]);
-			ci++;
-			if (val < 0.001)
-			{
-				printf("error: invalid value for -max option\r\n");
-				return false;
-			}
+			if (ci >= argc) { printf("error: missed value after -max option\r\n"); return false; }
+			double val = atof(argv[ci]); ci++;
+			if (!(val > 0.0)) { printf("error: invalid value for -max option\r\n"); return false; }
 			gMax = val;
 		}
-		else
+else
 		{
 			printf("error: unknown option %s\r\n", argument);
 			return false;
@@ -761,4 +787,3 @@ label_end:
 	free(pPntList2);
 	free(pPntList);
 }
-
