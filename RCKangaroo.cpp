@@ -119,7 +119,7 @@ void InitGpus()
 		GpuKangs[GpuCnt]->CudaIndex = i;
 		GpuKangs[GpuCnt]->persistingL2CacheMaxSize = deviceProp.persistingL2CacheMaxSize;
 		GpuKangs[GpuCnt]->mpCnt = deviceProp.multiProcessorCount;
-		GpuKangs[GpuCnt]->IsOldGpu = deviceProp.l2CacheSize < 16 * 1024 * 1024;
+		GpuKangs[GpuCnt]->IsOldGpu = true;
 		GpuCnt++;
 	}
 	printf("Total GPUs for work: %d\r\n", GpuCnt);
