@@ -6,7 +6,16 @@
 
 #include "utils.h"
 #include <wchar.h>
+static const char kTamesV15Tag[8] = {'T','M','B','M','1','5','\0','\0'};
+static const char kTamesV16Tag[8] = {'T','M','B','M','1','6','\0','\0'};
 
+
+#ifndef DB_FIND_LEN
+#define DB_FIND_LEN 5
+#endif
+#ifndef DB_REC_LEN
+#define DB_REC_LEN (DB_FIND_LEN + 22 + 1)
+#endif
 #ifdef _WIN32
 
 #else
@@ -229,78 +238,160 @@ label_not_found:
 //slow but I hope you are not going to create huge DB with this proof-of-concept software
 bool TFastBase::LoadFromFile(char* fn)
 {
-	Clear();
-	FILE* fp = fopen(fn, "rb");
-	if (!fp)
-		return false;
-	if (fread(Header, 1, sizeof(Header), fp) != sizeof(Header))
-	{
-		fclose(fp);
-		return false;
-	}
-	for (int i = 0; i < 256; i++)
-		for (int j = 0; j < 256; j++)
-			for (int k = 0; k < 256; k++)
-			{
-				TListRec* list = &lists[i][j][k];
-				fread(&list->cnt, 1, 2, fp);
-				if (list->cnt)
-				{
-					u32 grow = list->cnt / 2;
-					if (grow < DB_MIN_GROW_CNT)
-						grow = DB_MIN_GROW_CNT;
-					u32 newcap = list->cnt + grow;
-					if (newcap > 0xFFFF)
-						newcap = 0xFFFF;
-					list->data = (u32*)realloc(list->data, newcap * sizeof(u32));
-					list->capacity = newcap;
+Clear();
+    FILE* fp = fopen(fn, "rb");
+    if (!fp) return false;
 
-					for (int m = 0; m < list->cnt; m++)
-					{
-						u32 cmp_ptr;
-						void* ptr = mps[i].AllocRec(&cmp_ptr);
-						list->data[m] = cmp_ptr;
-						if (fread(ptr, 1, DB_REC_LEN, fp) != DB_REC_LEN)
-						{
-							fclose(fp);
-							return false;
-						}
-					}
-				}
-			}
-	fclose(fp);
-	return true;
+    if (fread(Header, 1, sizeof(Header), fp) != sizeof(Header)) {
+        fclose(fp); return false;
+    }
+
+    long pos_after_header = ftell(fp);
+    char tag[8];
+    size_t got = fread(tag, 1, sizeof(tag), fp);
+    bool use_v15 = (got == sizeof(tag) && memcmp(tag, kTamesV15Tag, 8) == 0);
+    bool use_v16 = (got == sizeof(tag) && memcmp(tag, kTamesV16Tag, 8) == 0);
+
+    if (!use_v15 && !use_v16) {
+        // --- Formato legado ---
+        fseek(fp, pos_after_header, SEEK_SET);
+
+        for (int i = 0; i < 256; i++)
+            for (int j = 0; j < 256; j++)
+                for (int k = 0; k < 256; k++)
+                {
+                    TListRec* list = &lists[i][j][k];
+
+                    if (fread(&list->cnt, 2, 1, fp) != 1) { fclose(fp); return false; }
+
+                    if (list->cnt) {
+                        // asegurar capacidad para list->data (u32*), no vector
+                        if (list->capacity < list->cnt) {
+                            unsigned short newcap = list->cnt;
+                            if (newcap < 16) newcap = 16;
+                            if (newcap > 0xFFFF) newcap = 0xFFFF;
+                            list->data = (u32*)realloc(list->data, (size_t)newcap * sizeof(u32));
+                            if (!list->data) { fclose(fp); return false; }
+                            list->capacity = newcap;
+                        }
+
+                        for (int m = 0; m < list->cnt; m++) {
+                            u32 cmp_ptr;
+                            void* ptr = mps[i].AllocRec(&cmp_ptr);
+                            list->data[m] = cmp_ptr;
+
+                            if (fread(ptr, 1, DB_REC_LEN, fp) != DB_REC_LEN) {
+                                fclose(fp); return false;
+                            }
+                        }
+                    }
+                }
+
+        fclose(fp);
+        return true;
+    }
+
+    // --- V1.5: bitmap + bulk por (i,j) ---
+    // selecc. tamaño por versión
+    size_t rec_len = use_v16 ? (size_t)DB_REC_LEN : (size_t)32;
+    for (int i = 0; i < 256; i++) {
+        for (int j = 0; j < 256; j++) {
+
+            unsigned char bitmap[32];
+            if (fread(bitmap, 1, 32, fp) != 32) { fclose(fp); return false; }
+
+            for (int k = 0; k < 256; k++) {
+                TListRec* list = &lists[i][j][k];
+
+                if (bitmap[k >> 3] & (1u << (k & 7))) {
+                    unsigned short cnt16;
+                    if (fread(&cnt16, 2, 1, fp) != 1) { fclose(fp); return false; }
+
+                    // asegurar capacidad (u32*)
+                    if (list->capacity < cnt16) {
+                        unsigned short newcap = cnt16;
+                        if (newcap < 16) newcap = 16;
+                        if (newcap > 0xFFFF) newcap = 0xFFFF;
+                        list->data = (u32*)realloc(list->data, (size_t)newcap * sizeof(u32));
+                        if (!list->data) { fclose(fp); return false; }
+                        list->capacity = newcap;
+                    }
+                    list->cnt = cnt16;
+
+                    size_t bytes = (size_t)cnt16 * rec_len;
+                    if (bytes) {
+                        std::vector<unsigned char> buf; buf.resize(bytes);
+                        if (fread(buf.data(), 1, bytes, fp) != bytes) { fclose(fp); return false; }
+
+                        for (int m = 0; m < cnt16; m++) {
+                            u32 cmp_ptr;
+                            void* dst = mps[i].AllocRec(&cmp_ptr);
+                            list->data[m] = cmp_ptr;
+                            memcpy(dst, &buf[(size_t)m * rec_len], rec_len);
+                        }
+                    }
+                } else {
+                    list->cnt = 0;
+                    // conservamos capacidad existente, no tocamos list->data
+                }
+            }
+        }
+    }
+
+    fclose(fp);
+    return true;
 }
+
 
 bool TFastBase::SaveToFile(char* fn)
 {
-	FILE* fp = fopen(fn, "wb");
-	if (!fp)
-		return false;
-	if (fwrite(Header, 1, sizeof(Header), fp) != sizeof(Header))
-	{
-		fclose(fp);
-		return false;
-	}
-	for (int i = 0; i < 256; i++)
-		for (int j = 0; j < 256; j++)
-			for (int k = 0; k < 256; k++)
-			{
-				TListRec* list = &lists[i][j][k];
-				fwrite(&list->cnt, 1, 2, fp);
-				for (int m = 0; m < list->cnt; m++)
-				{
-					void* ptr = mps[i].GetRecPtr(list->data[m]);
-					if (fwrite(ptr, 1, DB_REC_LEN, fp) != DB_REC_LEN)
-					{
-						fclose(fp);
-						return false;
-					}
-				}
-			}
-	fclose(fp);
-	return true;
+FILE* fp = fopen(fn, "wb");
+    if (!fp) return false;
+
+    if (fwrite(Header, 1, sizeof(Header), fp) != sizeof(Header)) {
+        fclose(fp); return false;
+    }
+
+    // --- TAG V1.5 ---
+    if (fwrite(kTamesV16Tag, 1, sizeof(kTamesV16Tag), fp) != sizeof(kTamesV16Tag)) {
+        fclose(fp); return false;
+    }
+
+    size_t rec_len = (size_t)DB_REC_LEN;
+    // (i,j): bitmap de 256 bits + por cada k set: cnt (u16) y bloque contiguo de registros
+    for (int i = 0; i < 256; i++) {
+        for (int j = 0; j < 256; j++) {
+
+            unsigned char bitmap[32]; memset(bitmap, 0, sizeof(bitmap));
+            for (int k = 0; k < 256; k++) {
+                TListRec* list = &lists[i][j][k];
+                if (list->cnt) bitmap[k >> 3] |= (1u << (k & 7));
+            }
+            if (fwrite(bitmap, 1, 32, fp) != 32) { fclose(fp); return false; }
+
+            for (int k = 0; k < 256; k++) if (bitmap[k >> 3] & (1u << (k & 7))) {
+                TListRec* list = &lists[i][j][k];
+                unsigned short cnt16 = (unsigned short)list->cnt;
+                if (fwrite(&cnt16, 2, 1, fp) != 1) { fclose(fp); return false; }
+
+                size_t bytes = (size_t)cnt16 * rec_len;
+                if (bytes) {
+                    // Junta en buffer para un solo fwrite
+                    std::vector<unsigned char> buf; buf.resize(bytes);
+                    for (int m = 0; m < cnt16; m++) {
+                        void* ptr = mps[i].GetRecPtr(list->data[m]);
+                        memcpy(&buf[(size_t)m * DB_REC_LEN], ptr, DB_REC_LEN);
+                    }
+                    if (fwrite(buf.data(), 1, bytes, fp) != bytes) { fclose(fp); return false; }
+                }
+            }
+        }
+    }
+
+    fclose(fp);
+    return true;
 }
+
 
 bool IsFileExist(char* fn)
 {

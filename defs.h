@@ -14,6 +14,24 @@ typedef unsigned int u32;
 typedef int i32;
 typedef unsigned short u16;
 typedef short i16;
+// === Feature flags (performance/algorithm toggles) ============================
+#ifndef USE_JACOBIAN
+// 0 = affine + inversión por lotes (actual predeterminado, muy rápido en GPU)
+// 1 = coordenadas jacobianas + conversión por lotes a afín sólo para DP
+#define USE_JACOBIAN 0
+#endif
+
+#ifndef SCALARMUL_W
+// Ventana para w-NAF (CPU). 4 es un buen equilibrio entre memoria y velocidad.
+#define SCALARMUL_W 4
+#endif
+
+#ifndef USE_MONTGOMERY_LADDER
+// 1 para habilitar la multiplicación escalar por Montgomery Ladder (CPU)
+#define USE_MONTGOMERY_LADDER 1
+#endif
+// ============================================================================
+
 typedef unsigned char u8;
 typedef char i8;
 

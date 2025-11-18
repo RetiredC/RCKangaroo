@@ -11,6 +11,7 @@
 
 // https://en.bitcoin.it/wiki/Secp256k1
 EcInt g_P; //FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE FFFFFC2F
+EcInt g_N; //FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE BAAEDCE6 AF48A03B BFD25E8C D0364141
 EcPoint g_G; //Generator point
 
 #define P_REV	0x00000001000003D1
@@ -111,6 +112,7 @@ void InitEc()
 	g_P.SetHexStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F"); //Fp
 	g_G.x.SetHexStr("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"); //G.x
 	g_G.y.SetHexStr("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8"); //G.y
+	g_N.SetHexStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"); //order of G
 #ifdef DEBUG_MODE
 	GTable = (u8*)malloc(16 * 256 * 256 * 64);
 	EcPoint pnt = g_G;
@@ -473,6 +475,13 @@ void EcInt::NegModP()
 	Add(g_P);
 }
 
+//assume value < N
+void EcInt::NegModN()
+{
+	Neg();
+	Add(g_N);
+}
+
 void EcInt::ShiftRight(int nbits)
 {
 	int offset = nbits / 64;
@@ -530,8 +539,6 @@ void EcInt::MulModP(EcInt& val)
 	c = _addcarry_u64(c, buff[1], h, data + 1);
 	c = _addcarry_u64(c, 0, buff[2], data + 2);
 	data[4] = _addcarry_u64(c, buff[3], 0, data + 3);
-	while (data[4])
-		Sub(g_P);
 }
 
 void EcInt::Mul_u64(EcInt& val, u64 multiplier)
@@ -736,6 +743,87 @@ void EcInt::RndMax(EcInt& max)
 }
 
 
+// ============================================================================
+// Extensión: w-NAF (w=4) para multiplicación escalar de G en CPU
+// - Implementa una versión canónica de w-NAF usando las primitivas afines
+//   ya existentes (AddPoints / DoublePoint). No toca el resto del proyecto.
+// ============================================================================
 
+namespace {
+    static inline bool limb_is_zero(const u64 a[4]) {
+        return (a[0]|a[1]|a[2]|a[3])==0ull;
+    }
+    static inline bool limb_is_odd(const u64 a[4]) {
+        return (a[0] & 1ull) != 0ull;
+    }
+    static inline void limb_sub_small(u64 a[4], unsigned v) {
+        unsigned long long b = v;
+        unsigned __int128 t = (unsigned __int128)a[0] - b;
+        a[0] = (u64)t;
+        unsigned __int128 borrow = (t >> 127) & 1;
+        for (int i=1;i<4 && borrow;i++) {
+            unsigned __int128 t2 = (unsigned __int128)a[i] - 1;
+            a[i] = (u64)t2;
+            borrow = (t2 >> 127) & 1;
+        }
+    }
+    static inline void limb_add_small(u64 a[4], unsigned v) {
+        unsigned __int128 t = (unsigned __int128)a[0] + (unsigned)v;
+        a[0] = (u64)t;
+        u64 carry = (u64)(t >> 64);
+        for (int i=1;i<4 && carry;i++) {
+            unsigned __int128 t2 = (unsigned __int128)a[i] + 1;
+            a[i] = (u64)t2;
+            carry = (u64)(t2 >> 64);
+        }
+    }
+    static inline void limb_shr1(u64 a[4]) {
+        u64 c = 0;
+        for (int i=3;i>=0;i--) {
+            u64 n = a[i];
+            a[i] = (n >> 1) | (c << 63);
+            c = n & 1ull;
+        }
+    }
+} // anonymous
 
+EcPoint EcEx::MultiplyG_WNAF4(const EcInt &k) {
+    // Precompute odd multiples of G: [1,3,5,7,9,11,13,15]G
+    EcPoint pre[8];
+    pre[0] = g_G;
+    EcPoint twoG = Ec::DoublePoint(g_G);
+    for (int i=1;i<8;i++) pre[i] = Ec::AddPoints(pre[i-1], twoG);
 
+    // Convert k to a 256-bit limb array
+    u64 kk[4] = {k.data[0], k.data[1], k.data[2], k.data[3]};
+
+    // w-NAF digit expansion
+    int digits[300]; int nd=0;
+    while (!limb_is_zero(kk)) {
+        int ui = 0;
+        if (limb_is_odd(kk)) {
+            int mod16 = (int)(kk[0] & 15ull);
+            if (mod16 > 8) ui = mod16 - 16; else ui = mod16;
+            if (ui >= 0) limb_sub_small(kk, (unsigned)ui);
+            else         limb_add_small(kk, (unsigned)(-ui));
+        }
+        digits[nd++] = ui;
+        limb_shr1(kk);
+    }
+
+    // Evaluate
+    bool R_is_inf = true;
+    EcPoint R; // undefined if inf
+    for (int i=nd-1;i>=0;i--) {
+        if (!R_is_inf) R = Ec::DoublePoint(R);
+        int ui = digits[i];
+        if (ui != 0) {
+            EcPoint add = pre[(abs(ui)-1)>>1];
+            if (ui < 0) { add.y.NegModP(); }
+            if (R_is_inf) { R = add; R_is_inf = false; }
+            else { R = Ec::AddPoints(R, add); }
+        }
+    }
+    if (R_is_inf) return EcPoint(); // zero
+    return R;
+}

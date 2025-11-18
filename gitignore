@@ -1,0 +1,43 @@
+# RCKangaroo .gitignore
+
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.out
+*.dll
+*.so
+*.dylib
+
+# CUDA intermediate files
+*.cubin
+*.fatbin
+*.ptx
+
+# Generated binaries
+RCKangaroo
+RCKangaroo.exe
+rckangaroo
+rckangaroo.exe
+
+# Logs and debug
+*.log
+*.tmp
+*.bak
+
+# Data files (distinguished points, etc.)
+*.dat
+*.bin
+
+# Editor/OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE/project configs
+.vscode/
+.idea/
+*.user
+*.sln
+*.vcxproj*
