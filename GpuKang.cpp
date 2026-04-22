@@ -353,18 +353,32 @@ bool RCGpuKang::Start()
 	}
 /**/
 	//but it's faster to calc them on GPU
-	u8 buf_PntA[64], buf_PntB[64];
+	// φ(PntA) = (β·PntA.x mod p, PntA.y) — secp256k1 endomorphism for WILD3/WILD4
+	EcPoint PntC = PntA;
+	PntC.x.MulModP(g_Beta);
+	EcPoint PntD = PntC;
+	PntD.y.NegModP(); // φ(PntB) = -φ(PntA)
+
+	u8 buf_PntA[64], buf_PntB[64], buf_PntC[64], buf_PntD[64];
 	PntA.SaveToBuffer64(buf_PntA);
 	PntB.SaveToBuffer64(buf_PntB);
+	PntC.SaveToBuffer64(buf_PntC);
+	PntD.SaveToBuffer64(buf_PntD);
+
+	int tame_end = KangCnt / 3;
+	int wild_each = (2 * KangCnt / 3) / 4;
 	for (int i = 0; i < KangCnt; i++)
 	{
-		if (i < KangCnt / 3)
+		if (i < tame_end)
 			memset(RndPnts[i].x, 0, 64);
+		else if (i < tame_end + wild_each)
+			memcpy(RndPnts[i].x, buf_PntA, 64);
+		else if (i < tame_end + 2 * wild_each)
+			memcpy(RndPnts[i].x, buf_PntB, 64);
+		else if (i < tame_end + 3 * wild_each)
+			memcpy(RndPnts[i].x, buf_PntC, 64);
 		else
-			if (i < 2 * KangCnt / 3)
-				memcpy(RndPnts[i].x, buf_PntA, 64);
-			else
-				memcpy(RndPnts[i].x, buf_PntB, 64);
+			memcpy(RndPnts[i].x, buf_PntD, 64);
 	}
 	//copy to gpu
 	err = cudaMemcpy(Kparams.Kangs, RndPnts, KangCnt * 96, cudaMemcpyHostToDevice);

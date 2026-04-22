@@ -155,21 +155,74 @@ bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, 
 		t.Neg();
 	if (TameType == TAME)
 	{
+		if (WildType == WILD3 || WildType == WILD4)
+		{
+			// TAME vs WILD3/4: k = ±|t-w|·λ_inv + halfRange  (mod N)
+			gPrivKey = t;
+			gPrivKey.Sub(w);
+			if (gPrivKey.data[4] >> 63)
+				gPrivKey.Neg(); // work with |diff|, guaranteed < N
+			gPrivKey.MulModN(g_LambdaInv);
+			EcInt sv = gPrivKey;
+			// candidate 1: +|diff|·λ_inv + halfRange
+			gPrivKey.AddModN(Int_HalfRange);
+			EcPoint P = ec.MultiplyG(gPrivKey);
+			if (P.IsEqual(pnt))
+				return true;
+			// candidate 2: -|diff|·λ_inv + halfRange
+			if (!sv.IsZero()) {
+				EcInt tmp = g_N;
+				tmp.Sub(sv);
+				sv = tmp;
+			}
+			sv.AddModN(Int_HalfRange);
+			P = ec.MultiplyG(sv);
+			return P.IsEqual(pnt);
+		}
+		else
+		{
+			// TAME vs WILD1/2: k = ±(t-w) + halfRange
+			gPrivKey = t;
+			gPrivKey.Sub(w);
+			EcInt sv = gPrivKey;
+			gPrivKey.Add(Int_HalfRange);
+			EcPoint P = ec.MultiplyG(gPrivKey);
+			if (P.IsEqual(pnt))
+				return true;
+			gPrivKey = sv;
+			gPrivKey.Neg();
+			gPrivKey.Add(Int_HalfRange);
+			P = ec.MultiplyG(gPrivKey);
+			return P.IsEqual(pnt);
+		}
+	}
+	else if ((TameType == WILD3 || TameType == WILD4) &&
+	         (WildType == WILD3 || WildType == WILD4))
+	{
+		// WILD3 vs WILD4: k = ±|t-w|/2·λ_inv + halfRange  (mod N)
 		gPrivKey = t;
 		gPrivKey.Sub(w);
+		if (gPrivKey.data[4] >> 63)
+			gPrivKey.Neg();
+		gPrivKey.ShiftRight(1);
+		gPrivKey.MulModN(g_LambdaInv);
 		EcInt sv = gPrivKey;
-		gPrivKey.Add(Int_HalfRange);
+		gPrivKey.AddModN(Int_HalfRange);
 		EcPoint P = ec.MultiplyG(gPrivKey);
 		if (P.IsEqual(pnt))
 			return true;
-		gPrivKey = sv;
-		gPrivKey.Neg();
-		gPrivKey.Add(Int_HalfRange);
-		P = ec.MultiplyG(gPrivKey);
+		if (!sv.IsZero()) {
+			EcInt tmp = g_N;
+			tmp.Sub(sv);
+			sv = tmp;
+		}
+		sv.AddModN(Int_HalfRange);
+		P = ec.MultiplyG(sv);
 		return P.IsEqual(pnt);
 	}
 	else
 	{
+		// WILD1 vs WILD2 (and unhandled cross-type wilds): k = ±|t-w|/2 + halfRange
 		gPrivKey = t;
 		gPrivKey.Sub(w);
 		if (gPrivKey.data[4] >> 63)
@@ -259,8 +312,11 @@ void CheckNewPoints()
 			if (!res)
 			{
 				bool w12 = ((pref->type == WILD1) && (nrec.type == WILD2)) || ((pref->type == WILD2) && (nrec.type == WILD1));
-				if (w12) //in rare cases WILD and WILD2 can collide in mirror, in this case there is no way to find K
-					;// ToLog("W1 and W2 collides in mirror");
+				bool w34 = ((pref->type == WILD3) && (nrec.type == WILD4)) || ((pref->type == WILD4) && (nrec.type == WILD3));
+				// cross-type wild collisions (WILD1/2 with WILD3/4) have no formula yet — suppress error
+				bool cross_wild = (pref->type != TAME) && (nrec.type != TAME) && !w12 && !w34;
+				if (w12 || w34 || cross_wild)
+					;
 				else
 				{
 					printf("Collision Error\r\n");

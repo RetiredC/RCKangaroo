@@ -13,6 +13,10 @@
 EcInt g_P; //FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE FFFFFC2F
 EcPoint g_G; //Generator point
 
+EcInt g_N;        // group order
+EcInt g_Beta;     // endomorphism field constant
+EcInt g_LambdaInv; // λ^(-1) mod N
+
 #define P_REV	0x00000001000003D1
 
 #ifdef DEBUG_MODE
@@ -111,6 +115,9 @@ void InitEc()
 	g_P.SetHexStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F"); //Fp
 	g_G.x.SetHexStr("79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"); //G.x
 	g_G.y.SetHexStr("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8"); //G.y
+	g_N.SetHexStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"); //N
+	g_Beta.SetHexStr("7AE96A2B657C07106E64479EAC3434E99CF0497512F58995C1396C28719501EE"); //β
+	g_LambdaInv.SetHexStr("AC9C52B33FA3CF1F5AD9E3FD77ED9BA4A880B9FC8EC739C2E0CFC810B51283CF"); //λ^-1 mod N
 #ifdef DEBUG_MODE
 	GTable = (u8*)malloc(16 * 256 * 256 * 64);
 	EcPoint pnt = g_G;
@@ -451,6 +458,29 @@ bool EcInt::IsEqual(EcInt& val)
 bool EcInt::IsZero()
 {
 	return ((data[0] == 0) && (data[1] == 0) && (data[2] == 0) && (data[3] == 0) && (data[4] == 0));
+}
+
+void EcInt::AddModN(EcInt& val)
+{
+	Add(val);
+	if (!IsLessThanU(g_N))
+		Sub(g_N);
+}
+
+// this = this * val mod N  (cold path — binary double-and-add, ~256 iterations)
+// Precondition: this >= 0 and already < N (unsigned, data[4] == 0)
+void EcInt::MulModN(EcInt& val)
+{
+	EcInt result, base;
+	result.SetZero();
+	base = *this;
+	for (int i = 0; i < 256; i++)
+	{
+		if ((val.data[i / 64] >> (i % 64)) & 1)
+			result.AddModN(base);
+		base.AddModN(base);
+	}
+	*this = result;
 }
 
 void EcInt::AddModP(EcInt& val)

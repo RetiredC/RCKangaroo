@@ -45,8 +45,16 @@ public:
 	void RndBits(int nbits);
 	void RndMax(EcInt& max);
 
+	void AddModN(EcInt& val);
+	void MulModN(EcInt& val); // cold path: binary method, ~256 iterations
+
 	u64 data[4 + 1];
 };
+
+// secp256k1 group order and endomorphism constants (defined in Ec.cpp)
+extern EcInt g_N;       // group order N
+extern EcInt g_Beta;    // field endomorphism: φ(x,y) = (β·x mod p, y)
+extern EcInt g_LambdaInv; // λ^(-1) mod N  (λ is the scalar s.t. φ(P) = λ·P)
 
 class EcPoint
 {
