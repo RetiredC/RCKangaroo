@@ -1,3 +1,18 @@
+# NVIDIA A100
+  Currently, Kangaroo does not support multiple GPUs (8 x NVIDIA A100 GPUs). I’d like to request this feature to enable compatibility with A100 for higher-performance compute tasks.
+
+  Key considerations:
+
+  Driver/kernel requirements
+
+  PCIe/NVLink compatibility
+
+  Any necessary firmware/BIOS updates
+
+  Let me know if additional details are needed. Thanks!
+
+---
+
 (c) 2024, RetiredCoder (RC)
 
 RCKangaroo is free and open-source (GPLv3).
