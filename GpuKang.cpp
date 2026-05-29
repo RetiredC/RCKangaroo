@@ -19,8 +19,8 @@ extern bool gGenMode; //tames generation mode
 int RCGpuKang::CalcKangCnt()
 {
 	Kparams.BlockCnt = mpCnt;
-	Kparams.BlockSize = IsOldGpu ? 512 : 256;
-	Kparams.GroupCnt = IsOldGpu ? 64 : 24;
+	Kparams.BlockSize = IsOldGpu ? BLOCK_SIZE_OLD_GPU : BLOCK_SIZE_NEW_GPU;
+	Kparams.GroupCnt = IsOldGpu ? PNT_GROUP_OLD_GPU : PNT_GROUP_NEW_GPU;
 	return Kparams.BlockSize* Kparams.GroupCnt* Kparams.BlockCnt;
 }
 
