@@ -36,7 +36,7 @@ typedef char i8;
  
 //use different options for cards older than RTX 40xx
 #ifdef __CUDA_ARCH__
-#if __CUDA_ARCH__ < 890
+#if __CUDA_ARCH__ < 890 && __CUDA_ARCH__ != 800
 #define OLD_GPU
 #endif
 #ifdef OLD_GPU
