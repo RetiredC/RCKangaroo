@@ -104,3 +104,4 @@ public:
 };
 
 bool IsFileExist(char* fn);
+int GetExeDir(char* out_dir, int out_dir_size);

@@ -26,48 +26,26 @@ typedef char i8;
 
 #define JMP_CNT				512
 
-//can be 8, 16, 24, 32
-#define PNT_GROUP_NEW_GPU	24
-//can be 8, 16, 24, 32, 40, 48, 56, 64
-#define PNT_GROUP_OLD_GPU	64
-
-#define BLOCK_SIZE_NEW_GPU	256
-#define BLOCK_SIZE_OLD_GPU	512
- 
-//use different options for cards older than RTX 40xx
-#ifdef __CUDA_ARCH__
-#if __CUDA_ARCH__ < 890
-#define OLD_GPU
-#endif
-#ifdef OLD_GPU
-#define BLOCK_SIZE			BLOCK_SIZE_OLD_GPU		
-#define PNT_GROUP_CNT		PNT_GROUP_OLD_GPU	
-#else
-#define BLOCK_SIZE			BLOCK_SIZE_NEW_GPU	
-#define PNT_GROUP_CNT		PNT_GROUP_NEW_GPU
-#endif
-#else //CPU, fake values
-#define BLOCK_SIZE			BLOCK_SIZE_OLD_GPU
-#define PNT_GROUP_CNT		PNT_GROUP_OLD_GPU
-#endif
+#define BLOCK_SIZE			256	
+#define PNT_GROUP_CNT		24
 
 // kang type
 #define TAME				0  // Tame kangs
-#define WILD1				1  // Wild kangs1 
-#define WILD2				2  // Wild kangs2
+#define WILD				1  // Wild kangs 
 
 #define GPU_DP_SIZE			48
 #define MAX_DP_CNT			(256 * 1024)
 
 #define JMP_MASK			(JMP_CNT-1)
+#define JMP_MASK_ADV		(2048 - 1) //including INV_FLAG and JMP2_FLAG
 
 #define DPTABLE_MAX_CNT		16
 
 #define MAX_CNT_LIST		(512 * 1024)
 
-#define DP_FLAG				0x8000
-#define INV_FLAG			0x4000
-#define JMP2_FLAG			0x2000
+#define DP_FLAG				0x0800
+#define INV_FLAG			0x0200
+#define JMP2_FLAG			0x0400
 
 #define MD_LEN				10
 
@@ -76,28 +54,37 @@ typedef char i8;
 //gpu kernel parameters
 struct TKparams
 {
-	u64* Kangs;
-	u32 KangCnt;
+	u64* L2;
+	u32* Jumps12;
+	u32* DPTable;
+	u32* Reserved1;
+	u64* JumpsList;
+	u64* LastPnts;
+	u32* dbg_buf;
+	u32* L1S2;
+	u64* Reserved2;
+
+	u32 iter_cnt;
 	u32 BlockCnt;
+	u32 StopThr;
+
+	u32 dp_mask;
+	///////////////////////////////////////////
+	u32* DPs_out;
+	u64* LoopTable;
+	u32* LoopedKangs;
+	u64* dists;
+	u64* JmpDists12;
+	u32 KangCnt;
+	u64* Jumps1;
+	u64* Jumps2;
+	u64* Jumps3;
 	u32 BlockSize;
 	u32 GroupCnt;
-	u64* L2;
 	u64 DP;
-	u32* DPs_out;
-	u64* Jumps1; //x(32b), y(32b), d(32b)
-	u64* Jumps2; //x(32b), y(32b), d(32b)
-	u64* Jumps3; //x(32b), y(32b), d(32b)
-	u64* JumpsList; //list of all performed jumps, grouped by warp(32) every 8 groups (from PNT_GROUP_CNT). Each jump is 2 bytes: 10bit jump index + flags: INV_FLAG, DP_FLAG, JMP2_FLAG
-	u32* DPTable;
-	u32* L1S2;
-	u64* LastPnts;
-	u64* LoopTable;
-	u32* dbg_buf;
-	u32* LoopedKangs;
 	bool IsGenMode; //tames generation mode
-
 	u32 KernelA_LDS_Size;
 	u32 KernelB_LDS_Size;
-	u32 KernelC_LDS_Size;	
+	u32 KernelC_LDS_Size;
 };
 

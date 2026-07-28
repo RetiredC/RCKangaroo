@@ -1,5 +1,5 @@
-// This file is a part of RCKangaroo software
-// (c) 2024, RetiredCoder (RC)
+// This file is a part of RCKangTurbo software
+// (c) 2026, RetiredCoder (RC)
 // License: GPLv3, see "LICENSE.TXT" file
 // https://github.com/RetiredC
 
@@ -52,6 +52,8 @@
 #define mad_wide_32(res,a,b,c)			asm volatile ("mad.wide.u32 %0, %1, %2, %3;" : "=l"(res) : "r"(a), "r"(b), "l"(c) );
 
 #define st_cs_v4_b32(addr,val)			asm volatile("st.cs.global.v4.b32 [%0], {%1, %2, %3, %4};\n":: "l"(addr), "r"((val).x), "r"((val).y), "r"((val).z), "r"((val).w));
+#define st_cs_b32(addr, val)			asm volatile("st.global.cs.b32 [%0], %1;" :: "l"((unsigned long long)(addr)), "r"(val) : "memory");
+#define st_cs_b16(addr, val)			asm volatile("st.global.cs.b16 [%0], %1;" :: "l"((unsigned long long)(addr)), "r"(val) : "memory");
 
 
 //P-related constants

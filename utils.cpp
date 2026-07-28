@@ -310,3 +310,38 @@ bool IsFileExist(char* fn)
 	fclose(fp);
 	return true;
 }
+
+int GetExeDir(char* out_dir, int out_dir_size)
+{
+	if (!out_dir || out_dir_size == 0) return 0;
+	out_dir[0] = '\0';
+
+#ifdef _WIN32
+	DWORD len = GetModuleFileNameA(NULL, out_dir, (DWORD)out_dir_size);
+	if (len == 0) return 0;
+
+	// If the buffer is too small, Windows returns out_dir_size (truncated) for GetModuleFileNameA.
+	if ((int)len >= out_dir_size) {
+		out_dir[0] = '\0';
+		return 0;
+	}
+
+	// Cut off exe name, leave directory
+	char* last_slash = strrchr(out_dir, '\\');
+	if (last_slash) *last_slash = '\0';
+	return 1;
+
+#else
+	// /proc/self/exe is a symlink to the running executable on Linux
+	ssize_t len = readlink("/proc/self/exe", out_dir, out_dir_size - 1);
+	if (len < 0) return 0;
+
+	// readlink does NOT null-terminate
+	out_dir[len] = '\0';
+
+	// Cut off exe name, leave directory
+	char* last_slash = strrchr(out_dir, '/');
+	if (last_slash) *last_slash = '\0';
+	return 1;
+#endif
+}

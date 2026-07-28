@@ -7,6 +7,7 @@
 #pragma once
 
 #include "Ec.h"
+#include "CallCubin.h"
 
 #define STATS_WND_SIZE	16
 
@@ -33,6 +34,10 @@ private:
 	int DP; //in bits
 	Ec ec;
 
+	CriticalSection cr;
+	std::vector<int> lsToRestart; //list of kangs to restart
+	void DoRestartKangs();
+
 	u32* DPs_out;
 	TKparams Kparams;
 
@@ -44,11 +49,12 @@ private:
 	EcJMP* EcJumps2;
 	EcJMP* EcJumps3;
 
-	EcPoint PntA;
-	EcPoint PntB;
+	EcPoint PntWild;
 
 	int cur_stats_ind;
 	int SpeedStats[STATS_WND_SIZE];
+
+	int Inv_DataSize;
 
 	void GenerateRndDistances();
 	bool Start();
@@ -56,18 +62,25 @@ private:
 #ifdef DEBUG_MODE
 	int Dbg_CheckKangs();
 #endif
+
+	TCubinCall cc;
+	void Asm_CallGpuKernelAB();
 public:
 	int persistingL2CacheMaxSize;
 	int CudaIndex; //gpu index in cuda
 	int mpCnt;
 	int KangCnt;
+	int JumperInd;
 	bool Failed;
-	bool IsOldGpu;
+
+	bool Is5xxx;
+	int sm_inv_cnt; //number of SMs used for inverse calculation
 
 	int CalcKangCnt();
 	bool Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJumps1, EcJMP* _EcJumps2, EcJMP* _EcJumps3);
 	void Stop();
 	void Execute();
+	void ToRestartKangaroo(int KangInd);
 
 	u32 dbg[256];
 

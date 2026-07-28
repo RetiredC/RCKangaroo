@@ -1,22 +1,31 @@
-(c) 2024, RetiredCoder (RC)
+(c) 2024-2026, RetiredCoder (RC)
 
 RCKangaroo is free and open-source (GPLv3).
-This software demonstrates efficient GPU implementation of SOTA Kangaroo method for solving ECDLP. 
+This software demonstrates efficient GPU implementation of SOTA v2 Kangaroo method for solving ECDLP. 
 It's part #3 of my research, you can find more details here: https://github.com/RetiredC
 
 Discussion thread: https://bitcointalk.org/index.php?topic=5517607
 
+
 <b>Features:</b>
 
 - Lowest K=1.15, it means 1.8 times less required operations compared to classic method with K=2.1, also it means that you need 1.8 times less memory to store DPs.
-- Fast, about 8GKeys/s on RTX 4090, 4GKeys/s on RTX 3090.
+- Fastest: about 14.5GH/s for 4090 and 19.3GH/s for 5090 (turbo kernels).
 - Keeps DP overhead as small as possible.
 - Supports ranges up to 170 bits.
 - Both Windows and Linux are supported.
 
+
+<b>Turbo kernels for 4xxx and 5xxx cards:</b>
+- Written in pure assembler (using RCAsm) to use full power of GPUs.
+- "Triple Montgomery trick" (let's name it like that) is applied to reduce GPU resources used for inverse calculation to about 3% only.
+- Inverse calculation is masked completely and excluded from the main loop.
+
+
 <b>Limitations:</b>
 
 - No advanced features like networking, saving/loading DPs, etc.
+
 
 <b>Command line parameters:</b>
 
@@ -28,7 +37,7 @@ Discussion thread: https://bitcointalk.org/index.php?topic=5517607
 
 <b>-range</b>		bit range of private the key. Mandatory if "-pubkey" option is specified. For example, for puzzle #85 bit range is "84" (84 bits). Must be in range 32...170. 
 
-<b>-dp</b>		DP bits. Must be in range 14...60. Low DP bits values cause larger DB but reduces DP overhead and vice versa. 
+<b>-dp</b>		DP bits. Must be in range 14...32. Low DP bits values cause larger DB but reduces DP overhead and vice versa. 
 
 <b>-max</b>		option to limit max number of operations. For example, value 5.5 limits number of operations to 5.5 * 1.15 * sqrt(range), software stops when the limit is reached. 
 
@@ -46,6 +55,7 @@ RCKangaroo.exe -dp 16 -range 76 -tames tames76.dat -max 10
 
 Then you can restart software with same parameters to see less K in benchmark mode or add "-tames tames76.dat" to solve some public key in 76-bit range faster.
 
+
 <b>Some notes:</b>
 
 Fastest ECDLP solvers will always use SOTA/SOTA+ method, as it's 1.4/1.5 times faster and requires less memory for DPs compared to the best 3-way kangaroos with K=1.6. 
@@ -55,6 +65,13 @@ Overall, this translates to roughly a 25% net improvement, which should not be i
 
 
 <b>Changelog:</b>
+
+v4.0:
+
+- added turbo kernels (asm) for 4xxx and 5xxx cards, about 14.5GH/s for 4090 and 19.3GH for 5090.
+- this version is optimized for 4xxx and 5xxx cards, for older cards use previous versions for best performance.
+- added estimation for K with DP overhead.
+- some minor changes, fixed some bugs.
 
 v3.1:
 

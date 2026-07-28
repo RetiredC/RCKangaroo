@@ -142,6 +142,7 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CallCubin.cpp" />
     <ClCompile Include="Ec.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Disabled</Optimization>
       <BasicRuntimeChecks Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Default</BasicRuntimeChecks>
@@ -153,6 +154,7 @@
     <ClCompile Include="utils.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CallCubin.h" />
     <ClInclude Include="defs.h" />
     <ClInclude Include="Ec.h" />
     <ClInclude Include="GpuKang.h" />

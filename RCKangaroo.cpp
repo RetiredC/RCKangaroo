@@ -27,7 +27,8 @@ volatile bool gSolved;
 EcInt Int_HalfRange;
 EcPoint Pnt_HalfRange;
 EcPoint Pnt_NegHalfRange;
-EcInt Int_TameOffset;
+EcInt x32;
+EcPoint Pntx32;
 Ec ec;
 
 CriticalSection csAddPoints;
@@ -41,7 +42,7 @@ EcInt gPrivKey;
 volatile u64 TotalOps;
 u32 TotalSolved;
 u32 gTotalErrors;
-u64 PntTotalOps;
+volatile u64 PntTotalOps;
 bool IsBench;
 
 u32 gDP;
@@ -99,7 +100,8 @@ void InitGpus()
 		cudaDeviceProp deviceProp;
 		cudaGetDeviceProperties(&deviceProp, i);
 		printf("GPU %d: %s, %.2f GB, %d CUs, cap %d.%d, PCI %d, L2 size: %d KB\r\n", i, deviceProp.name, ((float)(deviceProp.totalGlobalMem / (1024 * 1024))) / 1024.0f, deviceProp.multiProcessorCount, deviceProp.major, deviceProp.minor, deviceProp.pciBusID, deviceProp.l2CacheSize / 1024);
-		
+		int cm = deviceProp.major * 10 + deviceProp.minor;
+
 		if (deviceProp.major < 6)
 		{
 			printf("GPU %d - not supported, skip\r\n", i);
@@ -112,7 +114,21 @@ void InitGpus()
 		GpuKangs[GpuCnt]->CudaIndex = i;
 		GpuKangs[GpuCnt]->persistingL2CacheMaxSize = deviceProp.persistingL2CacheMaxSize;
 		GpuKangs[GpuCnt]->mpCnt = deviceProp.multiProcessorCount;
-		GpuKangs[GpuCnt]->IsOldGpu = deviceProp.l2CacheSize < 16 * 1024 * 1024;
+		GpuKangs[GpuCnt]->JumperInd = GpuCnt;
+
+		if ((cm != 89) && (cm != 120))
+		{
+			GpuKangs[GpuCnt]->sm_inv_cnt = 0;
+			printf("GPU %d: use 3.x version of RCKangaroo to get better performance!\r\n", i);
+		}
+		else
+		{
+			GpuKangs[GpuCnt]->Is5xxx = (deviceProp.major == 12);
+			GpuKangs[GpuCnt]->sm_inv_cnt = GpuKangs[GpuCnt]->Is5xxx ? (GpuKangs[GpuCnt]->mpCnt / 24) : (GpuKangs[GpuCnt]->mpCnt / 32);
+			if (!GpuKangs[GpuCnt]->sm_inv_cnt)
+				GpuKangs[GpuCnt]->sm_inv_cnt = 1;
+			printf("GPU %d: turbo kernel is enabled!\r\n", i);
+		}
 		GpuCnt++;
 	}
 	printf("Total GPUs for work: %d\r\n", GpuCnt);
@@ -134,8 +150,17 @@ void* kang_thr_proc(void* data)
 	return 0;
 }
 #endif
-void AddPointsToList(u32* data, int pnt_cnt, u64 ops_cnt)
+void AddPointsToList(u32* data, int pnt_cnt, u32 KangCnt, u64 ops_cnt, int JumperInd)
 {
+	for (int i = 0; i < pnt_cnt; i++) //convert KangInd to KangType
+	{
+		u32* p = data + (GPU_DP_SIZE / 4) * i;
+		int KangInd = p[10];
+		p[10] = (KangInd < KangCnt / 3) ? TAME : WILD;
+
+		//optional: restart kang after DP
+		//GpuKangs[JumperInd]->ToRestartKangaroo(KangInd);
+	}
 	csAddPoints.Enter();
 	if (PntIndex + pnt_cnt >= MAX_CNT_LIST)
 	{
@@ -158,13 +183,11 @@ bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, 
 		gPrivKey = t;
 		gPrivKey.Sub(w);
 		EcInt sv = gPrivKey;
-		gPrivKey.Add(Int_HalfRange);
 		EcPoint P = ec.MultiplyG(gPrivKey);
 		if (P.IsEqual(pnt))
 			return true;
 		gPrivKey = sv;
 		gPrivKey.Neg();
-		gPrivKey.Add(Int_HalfRange);
 		P = ec.MultiplyG(gPrivKey);
 		return P.IsEqual(pnt);
 	}
@@ -176,18 +199,15 @@ bool Collision_SOTA(EcPoint& pnt, EcInt t, int TameType, EcInt w, int WildType, 
 			gPrivKey.Neg();
 		gPrivKey.ShiftRight(1);
 		EcInt sv = gPrivKey;
-		gPrivKey.Add(Int_HalfRange);
 		EcPoint P = ec.MultiplyG(gPrivKey);
 		if (P.IsEqual(pnt))
 			return true;
 		gPrivKey = sv;
 		gPrivKey.Neg();
-		gPrivKey.Add(Int_HalfRange);
 		P = ec.MultiplyG(gPrivKey);
 		return P.IsEqual(pnt);
 	}
 }
-
 
 void CheckNewPoints()
 {
@@ -258,14 +278,8 @@ void CheckNewPoints()
 			bool res = Collision_SOTA(gPntToSolve, t, TameType, w, WildType, false) || Collision_SOTA(gPntToSolve, t, TameType, w, WildType, true);
 			if (!res)
 			{
-				bool w12 = ((pref->type == WILD1) && (nrec.type == WILD2)) || ((pref->type == WILD2) && (nrec.type == WILD1));
-				if (w12) //in rare cases WILD and WILD2 can collide in mirror, in this case there is no way to find K
-					;// ToLog("W1 and W2 collides in mirror");
-				else
-				{
-					printf("Collision Error\r\n");
-					gTotalErrors++;
-				}
+				printf("Collision Error\r\n");
+				gTotalErrors++;
 				continue;
 			}
 			gSolved = true;
@@ -316,7 +330,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		printf("Unsupported Range value (%d)!\r\n", Range);
 		return false;
 	}
-	if ((DP < 14) || (DP > 60)) 
+	if ((DP < 14) || (DP > 32)) 
 	{
 		printf("Unsupported DP value (%d)!\r\n", DP);
 		return false;
@@ -325,10 +339,23 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 	printf("\r\nSolving point: Range %d bits, DP %d, start...\r\n", Range, DP);
 	double ops = 1.15 * pow(2.0, Range / 2.0);
 	double dp_val = (double)(1ull << DP);
+	u64 total_kangs = GpuKangs[0]->CalcKangCnt();
+	for (int i = 1; i < GpuCnt; i++)
+		total_kangs += GpuKangs[i]->CalcKangCnt();
+	double path_single_kang = ops / total_kangs;
+	double DPs_per_kang = path_single_kang / dp_val;
+	printf("Estimated DPs per kangaroo (ideal): %.2f.%s\r\n", DPs_per_kang, (DPs_per_kang < 5) ? " DP overhead is big, use less DP value if possible!" : "");
+
+	if (DPs_per_kang < 0.001)
+		DPs_per_kang = 0.001;
+	double K = 1.15 + (0.07 + 0.76 / sqrt(DPs_per_kang)) / (1 + 0.30 * DPs_per_kang); //real K with DP overhead. Empirical formula.
+	printf("Estimated K with DP overhead: %.2f (DP overhead is about %d%%)\r\n", K, int(0.5 + 100 * (K / 1.15 - 1.0)) );
+	ops = K * pow(2.0, Range / 2.0);
+
 	double ram = (32 + 4 + 4) * ops / dp_val; //+4 for grow allocation and memory fragmentation
 	ram += sizeof(TListRec) * 256 * 256 * 256; //3byte-prefix table
 	ram /= (1024 * 1024 * 1024); //GB
-	printf("SOTA method, estimated ops: 2^%.3f, RAM for DPs: %.3f GB. DP and GPU overheads not included!\r\n", log2(ops), ram);
+	printf("SOTA v2 method, estimated ops: 2^%.3f, RAM for DPs: %.3f GB.\r\n", log2(ops), ram);
 	gIsOpsLimit = false;
 	double MaxTotalOps = 0.0;
 	if (gMax > 0)
@@ -340,12 +367,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		printf("Max allowed number of ops: 2^%.3f, max RAM for DPs: %.3f GB\r\n", log2(MaxTotalOps), ram_max);
 	}
 
-	u64 total_kangs = GpuKangs[0]->CalcKangCnt();
-	for (int i = 1; i < GpuCnt; i++)
-		total_kangs += GpuKangs[i]->CalcKangCnt();
-	double path_single_kang = ops / total_kangs;	
-	double DPs_per_kang = path_single_kang / dp_val;
-	printf("Estimated DPs per kangaroo: %.3f.%s\r\n", DPs_per_kang, (DPs_per_kang < 5) ? " DP overhead is big, use less DP value if possible!" : "");
+
 
 	if (!gGenMode && gTamesFileName[0])
 	{
@@ -407,12 +429,6 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 	Pnt_HalfRange = ec.MultiplyG(Int_HalfRange);
 	Pnt_NegHalfRange = Pnt_HalfRange;
 	Pnt_NegHalfRange.y.NegModP();
-	Int_TameOffset.Set(1);
-	Int_TameOffset.ShiftLeft(Range - 1);
-	EcInt tt;
-	tt.Set(1);
-	tt.ShiftLeft(Range - 5); //half of tame range width
-	Int_TameOffset.Sub(tt);
 	gPntToSolve = PntToSolve;
 
 //prepare GPUs
@@ -492,7 +508,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 		return false;
 	}
 
-	double K = (double)PntTotalOps / pow(2.0, Range / 2.0);
+	K = (double)PntTotalOps / pow(2.0, Range / 2.0);
 	printf("Point solved, K: %.3f (with DP and GPU overheads)\r\n\r\n", K);
 	db.Clear();
 	*pk_res = gPrivKey;
@@ -620,12 +636,12 @@ int main(int argc, char* argv[])
 #endif
 
 	printf("********************************************************************************\r\n");
-	printf("*                    RCKangaroo v3.1  (c) 2024 RetiredCoder                    *\r\n");
+	printf("*                  RCKangaroo v4.0 (c) 2024-2026 RetiredCoder                  *\r\n");
 	printf("********************************************************************************\r\n\r\n");
 
 	printf("This software is free and open-source: https://github.com/RetiredC\r\n");
-	printf("It demonstrates fast GPU implementation of SOTA Kangaroo method for solving ECDLP\r\n");
-
+	printf("It demonstrates fast GPU implementation of SOTA v2 Kangaroo method for solving ECDLP\r\n");
+	printf("This version is optimized for 4xxx and 5xxx cards, for older cards use previous versions for best performance!\r\n");
 #ifdef _WIN32
 	printf("Windows version\r\n");
 #else
@@ -637,6 +653,7 @@ int main(int argc, char* argv[])
 #endif
 
 	InitEc();
+	SetRndSeed(GetTickCount64());
 	gDP = 0;
 	gRange = 0;
 	gStartSet = false;
@@ -676,6 +693,10 @@ int main(int argc, char* argv[])
 			PntOfs.y.NegModP();
 			PntToSolve = ec.AddPoints(PntToSolve, PntOfs);
 		}
+		x32.Set(1);
+		x32.ShiftLeft(gRange - 5);
+		Pntx32 = ec.MultiplyG(x32);
+		PntToSolve = ec.AddPoints(PntToSolve, Pntx32); //for smooth edges
 
 		char sx[100], sy[100];
 		gPubKey.x.GetHexStr(sx);
@@ -691,6 +712,7 @@ int main(int argc, char* argv[])
 			goto label_end;
 		}
 		pk_found.AddModP(gStart);
+		pk_found.Sub(x32);
 		EcPoint tmp = ec.MultiplyG(pk_found);
 		if (!tmp.IsEqual(gPubKey))
 		{
@@ -720,6 +742,7 @@ int main(int argc, char* argv[])
 			printf("\r\nTAMES GENERATION MODE\r\n");
 		else
 			printf("\r\nBENCHMARK MODE\r\n");
+
 		//solve points, show K
 		while (1)
 		{
@@ -731,8 +754,11 @@ int main(int argc, char* argv[])
 			if (!gDP)
 				gDP = 16;
 
+			x32.Set(1);
+			x32.ShiftLeft(gRange - 5);
 			//generate random pk
 			pk.RndBits(gRange);
+			pk.Add(x32); //for smooth edges
 			PntToSolve = ec.MultiplyG(pk);
 
 			if (!SolvePoint(PntToSolve, gRange, gDP, &pk_found))
@@ -741,6 +767,8 @@ int main(int argc, char* argv[])
 					printf("FATAL ERROR: SolvePoint failed\r\n");
 				break;
 			}
+			pk.Sub(x32); //restore
+			pk_found.Sub(x32);
 			if (!pk_found.IsEqual(pk))
 			{
 				printf("FATAL ERROR: Found key is wrong!\r\n");
