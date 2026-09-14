@@ -71,22 +71,31 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 			printf("GPU %d, Allocate L2 memory failed: %s\n", CudaIndex, cudaGetErrorString(err));
 			return false;
 		}
+		//L2 buffer above is mandatory working memory for the kernel; everything below is
+		//just a QoS hint to keep it resident in L2, so a failure here must not abort Prepare().
 		size = L2size;
 		if (size > persistingL2CacheMaxSize)
 			size = persistingL2CacheMaxSize;
-		err = cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, size); // set max allowed size for L2
-		//persisting for L2
-		cudaStreamAttrValue stream_attribute;                                                   
-		stream_attribute.accessPolicyWindow.base_ptr = Kparams.L2;
-		stream_attribute.accessPolicyWindow.num_bytes = size;										
-		stream_attribute.accessPolicyWindow.hitRatio = 1.0;                                     
-		stream_attribute.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;             
-		stream_attribute.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;  	
-		err = cudaStreamSetAttribute(NULL, cudaStreamAttributeAccessPolicyWindow, &stream_attribute);
-		if (err != cudaSuccess)
+		if (accessPolicyMaxWindowSize > 0 && size > accessPolicyMaxWindowSize)
+			size = accessPolicyMaxWindowSize;
+		if (size > 0)
 		{
-			printf("GPU %d, cudaStreamSetAttribute failed: %s\n", CudaIndex, cudaGetErrorString(err));
-			return false;
+			err = cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, size); // set max allowed size for L2
+			if (err != cudaSuccess)
+				printf("GPU %d, cudaDeviceSetLimit(PersistingL2CacheSize) failed: %s, continuing without L2 persistence\n", CudaIndex, cudaGetErrorString(err));
+			else
+			{
+				//persisting for L2
+				cudaStreamAttrValue stream_attribute;
+				stream_attribute.accessPolicyWindow.base_ptr = Kparams.L2;
+				stream_attribute.accessPolicyWindow.num_bytes = size;
+				stream_attribute.accessPolicyWindow.hitRatio = 1.0;
+				stream_attribute.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
+				stream_attribute.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
+				err = cudaStreamSetAttribute(NULL, cudaStreamAttributeAccessPolicyWindow, &stream_attribute);
+				if (err != cudaSuccess)
+					printf("GPU %d, cudaStreamSetAttribute failed: %s, continuing without L2 persistence\n", CudaIndex, cudaGetErrorString(err));
+			}
 		}
 	}
 	size = MAX_DP_CNT * GPU_DP_SIZE + 16;

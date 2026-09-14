@@ -58,6 +58,7 @@ private:
 #endif
 public:
 	int persistingL2CacheMaxSize;
+	int accessPolicyMaxWindowSize;
 	int CudaIndex; //gpu index in cuda
 	int mpCnt;
 	int KangCnt;
