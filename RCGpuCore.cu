@@ -548,7 +548,7 @@ __global__ void KernelGen(const TKparams Kparams)
 		}
 
 		if (!Kparams.IsGenMode)
-			if (kang_ind >= Kparams.KangCnt / 3)
+			if (kang_ind >= Kparams.TameBorder)
 			{
 				AddPoints(t2x, t2y, x, y, x0, y0);
 				Copy_u64_x4(x, t2x);

@@ -18,6 +18,7 @@ void CallGpuKernelC(TKparams Kparams);
 
 void AddPointsToList(u32* data, int cnt, u32 KangCnt, u64 ops_cnt, int JumperInd);
 extern bool gGenMode; //tames generation mode
+extern int gTameRatioPct;
 
 int RCGpuKang::CalcKangCnt()
 {
@@ -64,6 +65,7 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 	Kparams.GroupCnt = PNT_GROUP_CNT;
 	KangCnt = Kparams.BlockSize * Kparams.GroupCnt * Kparams.BlockCnt;
 	Kparams.KangCnt = KangCnt;
+	Kparams.TameBorder = (u32)((u64)KangCnt * gTameRatioPct / 100);
 	Kparams.DP = DP;
 	Kparams.KernelA_LDS_Size = 98 * 1024;
 	Kparams.KernelB_LDS_Size = 48 * 1024;
@@ -406,7 +408,7 @@ void RCGpuKang::DoRestartKangs()
 		int KangInd = lsToRestart[i];
 
 		EcInt d;
-		if (KangInd < KangCnt / 3)
+		if (KangInd < (int)Kparams.TameBorder)
 			d.RndMax(x32); //TAME kangs
 		else
 		{
@@ -420,7 +422,7 @@ void RCGpuKang::DoRestartKangs()
 #else
 		EcPoint pnt = ec.MultiplyG(d);
 #endif
-		if (KangInd >= KangCnt / 3)
+		if (KangInd >= (int)Kparams.TameBorder)
 			pnt = ec.AddPoints(pnt, PntWild);
 		pnt.SaveToBuffer64((u8*)RndPnts[KangInd].x);
 
@@ -465,7 +467,7 @@ void RCGpuKang::GenerateRndDistances()
 	for (int i = 0; i < KangCnt; i++)
 	{
 		EcInt d;
-		if (i < KangCnt / 3)
+		if (i < (int)Kparams.TameBorder)
 			d.RndMax(x32); //TAME kangs
 		else
 		{
@@ -529,7 +531,7 @@ bool RCGpuKang::Start()
 	PntWild.SaveToBuffer64(buf_PntWild);
 	for (int i = 0; i < KangCnt; i++)
 	{
-		if (i < KangCnt / 3)
+		if (i < (int)Kparams.TameBorder)
 			memset(RndPnts[i].x, 0, 64);
 		else
 			memcpy(RndPnts[i].x, buf_PntWild, 64);
@@ -596,7 +598,7 @@ int RCGpuKang::Dbg_CheckKangs()
 		p = ec.MultiplyG_Fast(dist);
 		if (neg)
 			p.y.NegModP();
-		if (i < KangCnt / 3)
+		if (i < (int)Kparams.TameBorder)
 			p = p;
 		else
 			p = ec.AddPoints(PntWild, p);
