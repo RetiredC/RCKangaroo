@@ -55,11 +55,12 @@ char gTamesFileName[1024];
 double gMax;
 bool gGenMode; //tames generation mode
 bool gIsOpsLimit;
+int gTameRatioPct = 33; //percent of kangaroos that start as TAME, matches the original fixed KangCnt/3 split
 
 #pragma pack(push, 1)
 struct DBRec
 {
-	u8 x[12];
+	u8 x[3 + DB_FIND_LEN]; //3-byte bucket-routing prefix + DB_FIND_LEN find-key bytes
 	u8 d[22];
 	u8 type; //0 - tame, 1 - wild1, 2 - wild2
 };
@@ -152,11 +153,12 @@ void* kang_thr_proc(void* data)
 #endif
 void AddPointsToList(u32* data, int pnt_cnt, u32 KangCnt, u64 ops_cnt, int JumperInd)
 {
+	int tameBorder = (int)((u64)KangCnt * gTameRatioPct / 100);
 	for (int i = 0; i < pnt_cnt; i++) //convert KangInd to KangType
 	{
 		u32* p = data + (GPU_DP_SIZE / 4) * i;
 		int KangInd = p[10];
-		p[10] = (KangInd < KangCnt / 3) ? TAME : WILD;
+		p[10] = (KangInd < tameBorder) ? TAME : WILD;
 
 		//optional: restart kang after DP
 		//GpuKangs[JumperInd]->ToRestartKangaroo(KangInd);
@@ -227,7 +229,7 @@ void CheckNewPoints()
 	{
 		DBRec nrec;
 		u8* p = pPntList2 + i * GPU_DP_SIZE;
-		memcpy(nrec.x, p, 12);
+		memcpy(nrec.x, p, sizeof(nrec.x));
 		memcpy(nrec.d, p + 16, 22);
 		nrec.type = gGenMode ? TAME : p[40];
 
@@ -604,6 +606,18 @@ bool ParseCommandLine(int argc, char* argv[])
 				return false;
 			}
 			gMax = val;
+		}
+		else
+		if (strcmp(argument, "-tame-ratio") == 0)
+		{
+			int val = atoi(argv[ci]);
+			ci++;
+			if ((val < 1) || (val > 99))
+			{
+				printf("error: invalid value for -tame-ratio option\r\n");
+				return false;
+			}
+			gTameRatioPct = val;
 		}
 		else
 		{

@@ -36,6 +36,11 @@ typedef char i8;
 #define GPU_DP_SIZE			48
 #define MAX_DP_CNT			(256 * 1024)
 
+//TAMES (.dat v1.6) database record, stored past the 3-byte bucket-routing prefix:
+//<DB_FIND_LEN find-key bytes><22 distance bytes><1 type byte>
+#define DB_FIND_LEN			5
+#define DB_REC_LEN			(DB_FIND_LEN + 22 + 1)
+
 #define JMP_MASK			(JMP_CNT-1)
 #define JMP_MASK_ADV		(2048 - 1) //including INV_FLAG and JMP2_FLAG
 
@@ -76,6 +81,7 @@ struct TKparams
 	u64* dists;
 	u64* JmpDists12;
 	u32 KangCnt;
+	u32 TameBorder; //kangaroos with index < TameBorder start as TAME (see gTameRatioPct)
 	u64* Jumps1;
 	u64* Jumps2;
 	u64* Jumps3;
