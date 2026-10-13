@@ -6,6 +6,17 @@
 
 #include "defs.h"
 #include "RCGpuUtils.h"
+#include "ExperimentalWalk.h"
+
+#if RCK_EXPERIMENTAL_SOTA_HALF
+struct SotaHalfField {
+    __device__ __forceinline__ static void copy(u64* d, u64* a) { Copy_u64_x4(d, a); }
+    __device__ __forceinline__ static void neg(u64* a) { NegModP(a); }
+    __device__ __forceinline__ static void sub(u64* d, u64* a, u64* b) { SubModP(d, a, b); }
+    __device__ __forceinline__ static void mul(u64* d, u64* a, u64* b) { MulModP(d, a, b); }
+    __device__ __forceinline__ static void sqr(u64* d, u64* a) { SqrModP(d, a); }
+};
+#endif
 
 //imp2 table points for KernelA
 __device__ __constant__ u64 jmp2_table[8 * JMP_CNT];
@@ -121,6 +132,12 @@ __global__ void KernelA(const TKparams Kparams)
 
 			SubModP(x, tmp2, jmp_x);
 			SubModP(x, x, x0); 
+#if RCK_EXPERIMENTAL_SOTA_HALF
+            if (((L1S2 >> group) & 1) == 0 &&
+                ExperimentalWalk::SelectHalfAlternative<SotaHalfField>(
+                    x, tmp, x0, y0, jmp_x, jmp_y, dxs))
+                jmp_ind ^= INV_FLAG;
+#endif
 			SAVE_VAL_256(L2x, x, group); 
 
 			SubModP(y, x0, x);
@@ -131,8 +148,16 @@ __global__ void KernelA(const TKparams Kparams)
 			if (((L1S2 >> group) & 1) == 0) //normal mode, check L1S2 loop
 			{
 				u32 jmp_next = x[0] % JMP_CNT;
+#if RCK_EXPERIMENTAL_SOTA_HALF
+                // Either jump sign can be selected, so the old parity
+                // predictor is insufficient. Conservatively escape if the
+                // next point would use the same unsigned J1 index.
+                L1S2 |= ExperimentalWalk::SameIndexLoop(jmp_ind & JMP_MASK, jmp_next)
+                    ? (1u << group) : 0;
+#else
 				jmp_next |= ((u32)y[0] & 1) ? 0 : INV_FLAG; //inverted
 				L1S2 |= (jmp_ind == jmp_next) ? (1u << group) : 0; //loop L1S2 detected
+#endif
 			}
 			else
 			{

@@ -47,6 +47,15 @@ set(PROJECT_SOURCES
 
 add_executable(${TARGET_NAME} ${PROJECT_SOURCES})
 
+option(RCK_EXPERIMENTAL_SOTA_HALF "Experimental bit-9 SOTA-half (CUDA only, disables turbo ASM)" OFF)
+option(RCK_EXPERIMENTAL_JUMP_CAP "Experimental bound on J2/J3 jump exponents" OFF)
+option(RCK_FORCE_CUDA "Use CUDA A/B for an unchanged same-backend control" OFF)
+target_compile_definitions(${TARGET_NAME} PRIVATE
+    RCK_EXPERIMENTAL_SOTA_HALF=$<BOOL:${RCK_EXPERIMENTAL_SOTA_HALF}>
+    RCK_EXPERIMENTAL_JUMP_CAP=$<BOOL:${RCK_EXPERIMENTAL_JUMP_CAP}>
+    RCK_FORCE_CUDA=$<BOOL:${RCK_FORCE_CUDA}>
+)
+
 target_include_directories(${TARGET_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${CUDAToolkit_INCLUDE_DIRS}

@@ -13,6 +13,7 @@
 #include "defs.h"
 #include "utils.h"
 #include "GpuKang.h"
+#include "ExperimentalWalk.h"
 
 
 EcJMP EcJumps1[JMP_CNT];
@@ -116,6 +117,11 @@ void InitGpus()
 		GpuKangs[GpuCnt]->mpCnt = deviceProp.multiProcessorCount;
 		GpuKangs[GpuCnt]->JumperInd = GpuCnt;
 
+		GpuKangs[GpuCnt]->Is5xxx = (deviceProp.major == 12);
+#if RCK_USE_CUDA_WALK
+		GpuKangs[GpuCnt]->sm_inv_cnt = 0;
+		printf("GPU %d: CUDA A/B is selected; turbo ASM is disabled.\r\n", i);
+#else
 		if ((cm != 89) && (cm != 120))
 		{
 			GpuKangs[GpuCnt]->sm_inv_cnt = 0;
@@ -129,6 +135,7 @@ void InitGpus()
 				GpuKangs[GpuCnt]->sm_inv_cnt = 1;
 			printf("GPU %d: turbo kernel is enabled!\r\n", i);
 		}
+#endif
 		GpuCnt++;
 	}
 	printf("Total GPUs for work: %d\r\n", GpuCnt);
@@ -402,7 +409,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 	}
 
 	minjump.Set(1);
-	minjump.ShiftLeft(Range - 10); //large jumps for L1S2 loops. Must be almost RANGE_BITS
+	minjump.ShiftLeft(ExperimentalWalk::JumpExponent(Range, 1, RCK_EXPERIMENTAL_JUMP_CAP)); //J2: optional diffusion-bound experiment
 	for (int i = 0; i < JMP_CNT; i++)
 	{
 		EcJumps2[i].dist = minjump;
@@ -413,7 +420,7 @@ bool SolvePoint(EcPoint PntToSolve, int Range, int DP, EcInt* pk_res)
 	}
 
 	minjump.Set(1);
-	minjump.ShiftLeft(Range - 10 - 2); //large jumps for loops >2
+	minjump.ShiftLeft(ExperimentalWalk::JumpExponent(Range, 2, RCK_EXPERIMENTAL_JUMP_CAP)); //J3: preserve the J2/J3 exponent difference
 	for (int i = 0; i < JMP_CNT; i++)
 	{
 		EcJumps3[i].dist = minjump;
@@ -617,6 +624,15 @@ bool ParseCommandLine(int argc, char* argv[])
 			printf("error: you must also specify -dp, -range and -start options\r\n");
 			return false;
 		}
+#if RCK_EXPERIMENTAL_SOTA_HALF || RCK_EXPERIMENTAL_JUMP_CAP
+    // Existing tame headers store only the range, not the transition rule.
+    // Reject both reads and writes until the cache format is versioned.
+    if (gTamesFileName[0])
+    {
+        printf("error: -tames is unsupported by experimental walk builds (incompatible transition rules)\r\n");
+        return false;
+    }
+#endif
 	if (gTamesFileName[0] && !IsFileExist(gTamesFileName))
 	{
 		if (gMax == 0.0)
@@ -665,6 +681,10 @@ int main(int argc, char* argv[])
 	if (!ParseCommandLine(argc, argv))
 		return 0;
 
+#if RCK_EXPERIMENTAL_SOTA_HALF || RCK_EXPERIMENTAL_JUMP_CAP
+    printf("EXPERIMENTAL walk: SOTA-half=%d, jump-cap=%d; performance estimates below are baseline estimates.\r\n",
+        RCK_EXPERIMENTAL_SOTA_HALF, RCK_EXPERIMENTAL_JUMP_CAP);
+#endif
 	InitGpus();
 
 	if (!GpuCnt)

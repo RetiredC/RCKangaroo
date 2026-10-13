@@ -9,6 +9,7 @@
 #include "cuda.h"
 
 #include "GpuKang.h"
+#include "ExperimentalWalk.h"
 
 cudaError_t cuSetGpuParams(TKparams Kparams, u64* _jmp2_table);
 void CallGpuKernelGen(TKparams Kparams);
@@ -56,8 +57,10 @@ bool RCGpuKang::Prepare(EcPoint _PntToSolve, int _Range, int _DP, EcJMP* _EcJump
 		strcat(path, "kernel_sm120.cubin");
 	else
 		strcat(path, "kernel_sm89.cubin");
+#if !RCK_USE_CUDA_WALK
 	if (!cc.LoadCubin(path))
 		return false;
+#endif
 
 	Kparams.BlockCnt = mpCnt - sm_inv_cnt;
 	Kparams.BlockSize = BLOCK_SIZE;
