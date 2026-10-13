@@ -181,9 +181,161 @@ static void trajectory_checks() {
               << " J2 steps; all 262144 predictor pairs PASS\n";
 }
 
+struct ZeroThenSeven {
+    unsigned value = 0, calls = 0;
+    void RndMax(ZeroThenSeven& limit) {
+        require(limit.value == 16, "mock received wrong tame bound");
+        value = ++calls < 3 ? 0 : 7;
+    }
+    bool IsZero() const { return value == 0; }
+};
+
+static void padding_sampling_checks() {
+    unsigned bounds = 0, samples = 0, defaults = 0;
+    for (int range = 32; range <= 170; ++range) {
+        for (bool narrow : {false, true}) {
+            EcInt margin, wild, target_margin;
+            ExperimentalWalk::InitStartBounds(range, narrow, margin, wild);
+            ExperimentalWalk::InitStartMargin(range, narrow, target_margin);
+            auto expected_margin = power(range - (narrow ? 8 : 5));
+            require(margin.IsEqual(expected_margin) && margin.IsEqual(target_margin),
+                    "sampling/target margin mismatch");
+            // Independent old-style repeated addition catches leaving 34*h
+            // after narrowing the margin, which would drop most of the range.
+            EcInt repeated = scalar(0);
+            for (int i = 0; i < (narrow ? 258 : 34); ++i) repeated.Add(margin);
+            require(wild.IsEqual(repeated), "wild support is not W+2h");
+            auto width = power(range), excess = wild;
+            require(!excess.Sub(width), "wild support narrower than search interval");
+            auto twice = margin; twice.ShiftLeft(1);
+            require(excess.IsEqual(twice), "wrong padding at wild boundaries");
+            require(!(margin.data[0] & 1) && !(wild.data[0] & 1), "odd padding bounds");
+            require(wild.data[3] == 0 && wild.data[4] == 0, "bound exceeds 24-byte distance");
+            ++bounds;
+            SetRndSeed(0x50414400ULL + range);
+            for (int i = 0; i < 64; ++i) {
+                EcInt tame, distance;
+                ExperimentalWalk::SampleTameDistance(tame, margin, narrow);
+                distance.RndMax(wild); distance.data[0] &= ~1ULL;
+                require(tame.IsLessThanU(margin) && (!narrow || !tame.IsZero()), "invalid tame start");
+                require(distance.IsLessThanU(wild) && !(distance.data[0] & 1), "invalid wild start");
+                require(tame.data[3] == 0 && tame.data[4] == 0 &&
+                        distance.data[3] == 0 && distance.data[4] == 0, "sample exceeds 24-byte distance");
+                samples += 2;
+            }
+        }
+        // Preserve the entire old alternating RNG stream, not only bounds.
+        EcInt old_margin = power(range - 5), old_wild = scalar(0);
+        for (int i = 0; i < 34; ++i) old_wild.Add(old_margin);
+        std::array<EcInt, 64> expected;
+        SetRndSeed(0x53454544ULL + range);
+        for (unsigned i = 0; i < expected.size(); ++i) {
+            expected[i].RndMax(i % 3 == 0 ? old_margin : old_wild);
+            if (i % 3) expected[i].data[0] &= ~1ULL;
+        }
+        EcInt margin, wild;
+        ExperimentalWalk::InitStartBounds(range, false, margin, wild);
+        SetRndSeed(0x53454544ULL + range);
+        for (unsigned i = 0; i < expected.size(); ++i) {
+            EcInt actual;
+            if (i % 3 == 0) ExperimentalWalk::SampleTameDistance(actual, margin, false);
+            else { actual.RndMax(wild); actual.data[0] &= ~1ULL; }
+            require(actual.IsEqual(expected[i]), "default seeded start sequence changed");
+            ++defaults;
+        }
+    }
+    ZeroThenSeven bound; bound.value = 16;
+    ZeroThenSeven original, narrow;
+    ExperimentalWalk::SampleTameDistance(original, bound, false);
+    ExperimentalWalk::SampleTameDistance(narrow, bound, true);
+    require(original.IsZero() && original.calls == 1, "default zero/RNG behavior changed");
+    require(narrow.value == 7 && narrow.calls == 3, "narrow tame zero rejection failed");
+    std::cout << "padding sampling: " << bounds << " R32..170 bounds, " << samples
+              << " samples, " << defaults << " default RNG matches; zero rejection PASS\n";
+}
+
+static void padding_collision_checks() {
+    unsigned cases = 0, collisions = 0, target_shifts = 0;
+    for (int range : {32, 40, 52, 53, 78, 139, 170}) {
+        for (bool narrow : {false, true}) {
+            EcInt h, bound;
+            ExperimentalWalk::InitStartBounds(range, narrow, h, bound);
+            auto width = power(range), half = power(range - 1);
+            auto half_before = half, half_after = half, end_before = width, end = width;
+            auto one = scalar(1), two = scalar(2);
+            half_before.Sub(one); half_after.Add(one); end_before.Sub(two); end.Sub(one);
+            auto h_before = h, h_after = h; h_before.Sub(one); h_after.Add(one);
+            std::array<EcInt, 11> targets = {scalar(0), one, two, h_before, h, h_after,
+                half_before, half, half_after, end_before, end};
+            for (auto k : targets) {
+                auto q = k; q.Add(h);
+                // Tame parity must match q so both constructed wild labels
+                // are even. A small suffix avoids the legacy low64 duplicate
+                // filter when testing margins wider than 64 bits.
+                auto tame = h; tame.ShiftRight(1);
+                auto suffix = scalar(2 + (q.data[0] & 1)); tame.Add(suffix);
+                require(!tame.IsZero() && tame.IsLessThanU(h), "collision tame outside support");
+                auto lower = q, upper = q;
+                require(!lower.Sub(tame), "collision wild label became negative");
+                upper.Add(tame);
+                require(lower.IsLessThanU(bound) && upper.IsLessThanU(bound) &&
+                        !(lower.data[0] & 1) && !(upper.data[0] & 1), "endpoint wild coverage/parity failed");
+                require(lower.data[0] != upper.data[0], "wild fixture hits low64 duplicate filter");
+                auto q_point = Ec::MultiplyG(q), t_point = Ec::MultiplyG(tame);
+                auto lower_base = Ec::MultiplyG(lower), upper_base = Ec::MultiplyG(upper);
+                auto negative_q = negative(q_point);
+                auto lower_point = Ec::AddPoints(lower_base, negative_q);
+                auto upper_point = Ec::AddPoints(upper_base, negative_q);
+                require(equal(upper_point, t_point) && equal(lower_point, negative(t_point)),
+                        "tame/wild actual point relation failed");
+                require(equal(upper_point, negative(lower_point)), "wild/wild reflection failed");
+                auto start = power(200), offset = scalar(12345); start.Add(offset);
+                auto original_key = start; original_key.Add(k);
+                auto original_point = Ec::MultiplyG(original_key);
+                // Exercise the actual main-mode order: subtract start first,
+                // then add h. k=0 produces intermediate infinity; k=h needs
+                // doubling. The zero absolute scalar is a helper sentinel
+                // case only, not a valid user-supplied public key.
+                for (bool with_start : {false, true}) {
+                    auto start_value = with_start ? start : scalar(0);
+                    auto absolute = k; absolute.Add(start_value);
+                    EcPoint source, minus_start;
+                    if (!absolute.IsZero()) source = Ec::MultiplyG(absolute);
+                    if (!start_value.IsZero()) minus_start = negative(Ec::MultiplyG(start_value));
+                    auto translated = ExperimentalWalk::AddStartPoints<Ec>(source, minus_start);
+                    if (k.IsZero())
+                        require(translated.x.IsZero() && translated.y.IsZero(), "offset subtraction lost infinity");
+                    auto margin_point = Ec::MultiplyG(h);
+                    auto shifted = ExperimentalWalk::AddStartPoints<Ec>(translated, margin_point);
+                    require(equal(shifted, q_point), "actual host target shift failed at boundary/doubling");
+                    ++target_shifts;
+                }
+                auto verify_recovery = [&](EcInt trial) {
+                    require(trial.IsEqual(q) && equal(Ec::MultiplyG(trial), q_point), "shifted collision recovery failed");
+                    require(!trial.Sub(h) && trial.IsEqual(k), "padding subtraction recovered wrong offset");
+                    trial.Add(start);
+                    require(trial.IsEqual(original_key) && equal(Ec::MultiplyG(trial), original_point),
+                            "nonzero-start public-key recovery failed");
+                    ++collisions;
+                };
+                auto tw_same = upper; tw_same.Sub(tame); verify_recovery(tw_same);
+                auto tw_opposite = lower; tw_opposite.Add(tame); verify_recovery(tw_opposite);
+                auto ww = lower; ww.Add(upper);
+                require(!(ww.data[0] & 1), "wild/wild recovery is not integral");
+                ww.ShiftRight(1); verify_recovery(ww);
+                ++cases;
+            }
+        }
+    }
+    std::cout << "padding collisions: " << cases << " endpoint/center cases, " << collisions
+              << " TW/WW point relations and nonzero-start recoveries; " << target_shifts
+              << " actual host target shifts PASS\n";
+}
+
 int main() {
     try {
-        InitEc(); selector_checks(); exponent_checks(); trajectory_checks(); DeInitEc();
+        InitEc(); selector_checks(); exponent_checks(); trajectory_checks();
+        padding_sampling_checks(); padding_collision_checks(); DeInitEc();
         std::cout << "PASS (portable CPU helper checks; no CUDA/ASM execution or performance claim)\n";
     } catch (const std::exception& e) {
         std::cerr << "FAIL: " << e.what() << '\n'; return EXIT_FAILURE;

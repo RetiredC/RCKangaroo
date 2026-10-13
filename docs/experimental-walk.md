@@ -1,8 +1,9 @@
-# Experimental SOTA-half selector and large-range jump cap
+# Experimental walk and starting-range policies
 
 Based on upstream `main` at `618473acd7f5e696be5ec4f8377c18cc55c1361c`
-(checked 2026-10-13; latest release: v4.0). Both changes are **off by
-default** and independently selectable. This is a proposal for GPU evaluation,
+(main rechecked 2026-10-14; latest release checked: v4.0). All experiments
+are **off by default**. The selector and cap are independent; narrow padding
+requires the cap. This is a proposal for GPU evaluation,
 not a measured speedup of this CUDA implementation.
 
 ## Continuation selection
@@ -55,6 +56,31 @@ of this cap. The constants above are an experimental policy, not a proved
 optimum or a validated production bug fix. No model-derived large-puzzle
 speedup is claimed here.
 
+## Optional narrower starting margin
+
+`RCK_EXPERIMENTAL_NARROW_PADDING` changes the host-side edge margin from
+`h=W/32` to `h=W/256`, where `W=2^R`. It requires the jump-cap option.
+Initial and restart sampling use the same helper: tame distances are in
+`(0,h)` in this mode, and even wild distances are in `[0,W+2h)`. The caller
+shifts the target by `+h` and subtracts that same `h` from the recovered key.
+The default mode preserves upstream's `[0,h)` tame sampler and RNG sequence.
+Zero tame seeds are rejected only in the new mode because KernelGen cannot
+represent a zero-scalar tame point. Main-mode target preparation also handles
+equal points (`k=h`) and intermediate infinity (`k=0` after subtracting the
+interval start); the upstream affine helper does not handle those cases.
+
+This changes host initialization, not the GPU walking kernels or backend.
+The ideal uniform-target overlap model predicts an old/new work ratio of
+**1.0162153x** (`K: 1.12168456 -> 1.10378638`), i.e. about **1.596% fewer steps**. A 1.0267734x ratio applies only at the interval center (or to
+a model omitting useful wild-wild collisions). Neither is a GPU timing result.
+See [the derivation and reproduction](experimental-padding.md).
+
+The cap's diffusion motivation makes this worth evaluating at large ranges,
+including R139 (puzzle 140), but does not prove it sufficient for the actual
+correlated walk. The option is available for controlled experiments at all
+supported ranges; no benefit or safe smoothing budget is established at
+small ranges, especially R<=52 where the cap changes nothing.
+
 ## Build and compare
 
 With a supported CUDA toolkit, make separate build directories:
@@ -76,9 +102,13 @@ cmake --build build-half --parallel
 cmake -S . -B build-cap -DRCK_EXPERIMENTAL_JUMP_CAP=ON
 cmake --build build-cap --parallel
 
-# Both experiments together.
+# Selector and cap together.
 cmake -S . -B build-both -DRCK_EXPERIMENTAL_SOTA_HALF=ON -DRCK_EXPERIMENTAL_JUMP_CAP=ON
 cmake --build build-both --parallel
+
+# Compare cap-only vs cap + narrow margin on the same backend.
+cmake -S . -B build-cap-narrow -DRCK_EXPERIMENTAL_JUMP_CAP=ON -DRCK_EXPERIMENTAL_NARROW_PADDING=ON
+cmake --build build-cap-narrow --parallel
 ```
 
 Existing toolkit-path configuration still applies. For a cap-only control
@@ -95,8 +125,8 @@ The unchanged default and forced-CUDA control are both needed for an honest
 GPU comparison. Startup prints the selected policy; existing K/DP estimates
 remain estimates for the baseline method.
 
-Experimental builds reject `-tames` for both loading and generation. The
-current cache header identifies the range, not the walk policy, so it cannot
+Experimental policy builds reject `-tames` for both loading and generation. The
+current cache header identifies the range, not the walk or sampling policy, so it cannot
 distinguish these tables from the original ones. `RCK_FORCE_CUDA` alone does
 not alter the policy and retains tame support.
 
@@ -110,7 +140,8 @@ python3 tests/run_portable_walk.py
 
 These compile the shared helper against upstream `Ec.cpp`, compare selected
 points against independent full additions, verify reflection and distance
-labels, and check jump-table bounds and points. They do not compile the CUDA
+labels, check jump-table bounds and points, and exercise starting bounds,
+synthetic edge/center collision recovery and zero-seed rejection. They do not compile the CUDA
 translation unit or execute kernels. CUDA compilation, end-to-end GPU key
 recovery, DP behavior, occupancy, wall time and large-range cap behavior
 remain to be checked before this proposal is ready to merge.

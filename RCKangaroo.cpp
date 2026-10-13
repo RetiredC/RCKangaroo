@@ -28,8 +28,8 @@ volatile bool gSolved;
 EcInt Int_HalfRange;
 EcPoint Pnt_HalfRange;
 EcPoint Pnt_NegHalfRange;
-EcInt x32;
-EcPoint Pntx32;
+EcInt StartMargin;
+EcPoint PntStartMargin;
 Ec ec;
 
 CriticalSection csAddPoints;
@@ -624,7 +624,7 @@ bool ParseCommandLine(int argc, char* argv[])
 			printf("error: you must also specify -dp, -range and -start options\r\n");
 			return false;
 		}
-#if RCK_EXPERIMENTAL_SOTA_HALF || RCK_EXPERIMENTAL_JUMP_CAP
+#if RCK_EXPERIMENTAL_SOTA_HALF || RCK_EXPERIMENTAL_JUMP_CAP || RCK_EXPERIMENTAL_NARROW_PADDING
     // Existing tame headers store only the range, not the transition rule.
     // Reject both reads and writes until the cache format is versioned.
     if (gTamesFileName[0])
@@ -681,9 +681,9 @@ int main(int argc, char* argv[])
 	if (!ParseCommandLine(argc, argv))
 		return 0;
 
-#if RCK_EXPERIMENTAL_SOTA_HALF || RCK_EXPERIMENTAL_JUMP_CAP
-    printf("EXPERIMENTAL walk: SOTA-half=%d, jump-cap=%d; performance estimates below are baseline estimates.\r\n",
-        RCK_EXPERIMENTAL_SOTA_HALF, RCK_EXPERIMENTAL_JUMP_CAP);
+#if RCK_EXPERIMENTAL_SOTA_HALF || RCK_EXPERIMENTAL_JUMP_CAP || RCK_EXPERIMENTAL_NARROW_PADDING
+    printf("EXPERIMENTAL walk: SOTA-half=%d, jump-cap=%d, narrow-padding=%d; performance estimates below are baseline estimates.\r\n",
+        RCK_EXPERIMENTAL_SOTA_HALF, RCK_EXPERIMENTAL_JUMP_CAP, RCK_EXPERIMENTAL_NARROW_PADDING);
 #endif
 	InitGpus();
 
@@ -711,12 +711,11 @@ int main(int argc, char* argv[])
 		{
 			PntOfs = ec.MultiplyG(gStart);
 			PntOfs.y.NegModP();
-			PntToSolve = ec.AddPoints(PntToSolve, PntOfs);
+			PntToSolve = ExperimentalWalk::AddStartPoints<Ec>(PntToSolve, PntOfs);
 		}
-		x32.Set(1);
-		x32.ShiftLeft(gRange - 5);
-		Pntx32 = ec.MultiplyG(x32);
-		PntToSolve = ec.AddPoints(PntToSolve, Pntx32); //for smooth edges
+		ExperimentalWalk::InitStartMargin(gRange, RCK_EXPERIMENTAL_NARROW_PADDING, StartMargin);
+		PntStartMargin = ec.MultiplyG(StartMargin);
+		PntToSolve = ExperimentalWalk::AddStartPoints<Ec>(PntToSolve, PntStartMargin); //for smooth edges
 
 		char sx[100], sy[100];
 		gPubKey.x.GetHexStr(sx);
@@ -732,7 +731,7 @@ int main(int argc, char* argv[])
 			goto label_end;
 		}
 		pk_found.AddModP(gStart);
-		pk_found.Sub(x32);
+		pk_found.Sub(StartMargin);
 		EcPoint tmp = ec.MultiplyG(pk_found);
 		if (!tmp.IsEqual(gPubKey))
 		{
@@ -774,11 +773,10 @@ int main(int argc, char* argv[])
 			if (!gDP)
 				gDP = 16;
 
-			x32.Set(1);
-			x32.ShiftLeft(gRange - 5);
+			ExperimentalWalk::InitStartMargin(gRange, RCK_EXPERIMENTAL_NARROW_PADDING, StartMargin);
 			//generate random pk
 			pk.RndBits(gRange);
-			pk.Add(x32); //for smooth edges
+			pk.Add(StartMargin); //for smooth edges
 			PntToSolve = ec.MultiplyG(pk);
 
 			if (!SolvePoint(PntToSolve, gRange, gDP, &pk_found))
@@ -787,8 +785,8 @@ int main(int argc, char* argv[])
 					printf("FATAL ERROR: SolvePoint failed\r\n");
 				break;
 			}
-			pk.Sub(x32); //restore
-			pk_found.Sub(x32);
+			pk.Sub(StartMargin); //restore
+			pk_found.Sub(StartMargin);
 			if (!pk_found.IsEqual(pk))
 			{
 				printf("FATAL ERROR: Found key is wrong!\r\n");

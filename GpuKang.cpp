@@ -395,12 +395,8 @@ void RCGpuKang::DoRestartKangs()
 		return;
 	}
 
-	EcInt WildRange, x32;
-	x32.Set(1);
-	x32.ShiftLeft(Range - 5);
-	WildRange.Set(0);
-	for (int i = 0; i < 32 + 2; i++) // +2 to smooth edges, PntToSolve must be RealPntToSolve+x32
-		WildRange.Add(x32);
+	EcInt WildRange, StartMargin;
+	ExperimentalWalk::InitStartBounds(Range, RCK_EXPERIMENTAL_NARROW_PADDING, StartMargin, WildRange);
 
 	cudaError_t err;
 	u64 t0 = GetTickCount64();
@@ -410,7 +406,7 @@ void RCGpuKang::DoRestartKangs()
 
 		EcInt d;
 		if (KangInd < KangCnt / 3)
-			d.RndMax(x32); //TAME kangs
+			ExperimentalWalk::SampleTameDistance(d, StartMargin, RCK_EXPERIMENTAL_NARROW_PADDING); //TAME kangs
 		else
 		{
 			d.RndMax(WildRange);
@@ -458,18 +454,14 @@ void RCGpuKang::DoRestartKangs()
 
 void RCGpuKang::GenerateRndDistances()
 {
-	EcInt WildRange, x32;
-	x32.Set(1);
-	x32.ShiftLeft(Range - 5);
-	WildRange.Set(0);
-	for (int i = 0; i < 32 + 2; i++) // +2 to smooth edges, PntToSolve must be RealPntToSolve+x32
-		WildRange.Add(x32);
+	EcInt WildRange, StartMargin;
+	ExperimentalWalk::InitStartBounds(Range, RCK_EXPERIMENTAL_NARROW_PADDING, StartMargin, WildRange);
 
 	for (int i = 0; i < KangCnt; i++)
 	{
 		EcInt d;
 		if (i < KangCnt / 3)
-			d.RndMax(x32); //TAME kangs
+			ExperimentalWalk::SampleTameDistance(d, StartMargin, RCK_EXPERIMENTAL_NARROW_PADDING); //TAME kangs
 		else
 		{
 			d.RndMax(WildRange);
@@ -495,7 +487,7 @@ bool RCGpuKang::Start()
 	NegPntHalfRange = PntHalfRange;
 	NegPntHalfRange.y.NegModP();
 
-	PntWild = PntToSolve; //to smooth edges PntToSolve = RealPnt+x32 (added in caller)
+	PntWild = PntToSolve; //to smooth edges PntToSolve = RealPnt+StartMargin (added in caller)
 	PntWild.y.NegModP(); //negate
 
 	RndPnts = (TPointPriv*)malloc(KangCnt * 96);
